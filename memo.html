@@ -87,6 +87,23 @@
       </div>
     </fieldset>
 
+    <!-- 画像：展覧会で撮った写真などを付ける。追加・削除はその場で保存される -->
+    <fieldset id="images-box">
+      <legend>画像</legend>
+      <p id="images-hint" hidden>このメモを一度「保存」すると、画像を追加できます。</p>
+      <div id="images-body">
+        <p class="note">
+          画像の追加・削除は、「保存」を押さなくても、すぐに保存されます。
+          画像は、このブラウザの中にだけ保存され、外部には送られません。
+          大きな写真は、長辺 1600 ピクセルに縮小して保存します（PNG・JPEG・WebP・GIF）。
+        </p>
+        <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+        <div class="drop-zone" id="image-drop">ここに画像をドラッグして、追加することもできます</div>
+        <div class="message" id="image-message"></div>
+        <div class="image-list" id="image-list"></div>
+      </div>
+    </fieldset>
+
     <!-- PDFから取り込んだメモだけに出す：取り込み元と元のテキスト（読み取り専用） -->
     <details id="source-box" hidden>
       <summary>取り込み元の情報</summary>
@@ -271,12 +288,97 @@
       if (list.length > 20) box.append("（上位 20 件を表示。言葉を足して絞り込んでください）");
     }
 
-    // リンク欄の表示：保存前の新規メモでは、案内だけを出す
+    // リンク欄と画像欄の表示：保存前の新規メモでは、案内だけを出す
     function showLinksBox() {
       document.getElementById("links-hint").hidden = isSaved;
       document.getElementById("links-body").hidden = !isSaved;
-      if (isSaved) refreshLinks();
+      document.getElementById("images-hint").hidden = isSaved;
+      document.getElementById("images-body").hidden = !isSaved;
+      if (isSaved) {
+        refreshLinks();
+        refreshImages();
+      }
     }
+
+    // ----- 画像 -----
+    let imageUrls = []; // 画面に出している画像の、一時的なアドレス（作り直すときに解放する）
+
+    // 画像の一覧を、最新の内容で表示し直す
+    async function refreshImages() {
+      imageUrls.forEach((url) => URL.revokeObjectURL(url));
+      imageUrls = [];
+      const list = document.getElementById("image-list");
+      list.innerHTML = "";
+      const images = await MemoDB.getImages(memo.id);
+      for (const image of images) {
+        // 保存した画像（Blob）から、表示用の一時的なアドレスを作る
+        const url = URL.createObjectURL(image.blob);
+        imageUrls.push(url);
+
+        const figure = document.createElement("figure");
+        figure.className = "image-item";
+        const link = document.createElement("a");
+        link.href = url;
+        link.target = "_blank"; // 押すと、大きい画像が別のタブで開く
+        link.title = "大きく表示";
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = image.name;
+        link.appendChild(img);
+
+        const caption = document.createElement("figcaption");
+        caption.textContent = image.name;
+        const del = document.createElement("button");
+        del.type = "button"; // フォームの送信ボタンにならないようにする
+        del.textContent = "削除";
+        del.className = "danger";
+        del.addEventListener("click", async () => {
+          if (!confirm("この画像を削除します。元に戻せません。よろしいですか？")) return;
+          await MemoDB.removeImage(image.id);
+          document.getElementById("image-message").textContent = "画像を削除しました";
+          refreshImages();
+        });
+        figure.append(link, caption, del);
+        list.appendChild(figure);
+      }
+      if (images.length === 0) list.textContent = "画像はまだありません";
+    }
+
+    // 選ばれた画像ファイルを、まとめて追加する。1つ失敗しても、ほかは続ける
+    async function addImages(files) {
+      const message = document.getElementById("image-message");
+      message.className = "message";
+      const errors = [];
+      let added = 0;
+      for (const file of files) {
+        try {
+          await MemoDB.addImage(memo.id, file);
+          added++;
+        } catch (err) {
+          errors.push(err.message);
+        }
+      }
+      if (errors.length) message.className = "message error";
+      message.textContent = (added ? added + " 枚を追加しました。" : "") + errors.join(" ");
+      refreshImages();
+    }
+
+    document.getElementById("image-input").addEventListener("change", (e) => {
+      const files = [...e.target.files];
+      e.target.value = ""; // 同じファイルを、もう一度選べるようにする
+      if (files.length) addImages(files);
+    });
+
+    // ドラッグして追加（ページから外れた画像が、ブラウザで開いてしまわないよう、受け取り口で止める）
+    const dropZone = document.getElementById("image-drop");
+    dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("over"); });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("over");
+      const files = [...e.dataTransfer.files];
+      if (files.length) addImages(files);
+    });
 
     const linkSearch = document.getElementById("link-search");
     linkSearch.addEventListener("input", showCandidates);

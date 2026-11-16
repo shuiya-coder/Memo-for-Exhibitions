@@ -24,6 +24,7 @@
     table.compare tr.diff td { background: #fff3b0; }
     table.compare tr.diff th:first-child { background: #ffe066; }
     td.body { white-space: pre-wrap; }
+    table.compare td img { max-width: 140px; max-height: 140px; margin: 0 6px 6px 0; border: 1px solid #ccc; vertical-align: top; }
     td .none { color: #aaa; }
     .badge { font-size: 0.8rem; padding: 1px 6px; border-radius: 8px; background: #e8f0fb; margin-left: 4px; }
     .badge.base { background: #1a5fb4; color: #fff; }
@@ -68,7 +69,11 @@
       ["参考文献", (m) => m.references, "body"],
     ];
 
+    let imageUrls = []; // 画面に出している画像の、一時的なアドレス（表示し直すときに解放する）
+
     async function render() {
+      imageUrls.forEach((url) => URL.revokeObjectURL(url));
+      imageUrls = [];
       const all = await MemoDB.getAll();
       const byId = new Map(all.map((m) => [m.id, m]));
       const base = byId.get(baseId);
@@ -139,6 +144,33 @@
       }
       if (diffOnly && body.rows.length === 0) {
         info.textContent += " 違いのある項目はありません。";
+      }
+
+      // 画像の行：各メモの画像を、小さく並べる（押すと、別のタブで大きく開く）。違いの強調はしない
+      const imageSets = await Promise.all(columns.map((c) => MemoDB.getImages(c.memo.id)));
+      const imageRow = body.insertRow();
+      imageRow.appendChild(document.createElement("th")).textContent = "画像";
+      for (const images of imageSets) {
+        const td = imageRow.insertCell();
+        if (images.length === 0) {
+          const none = document.createElement("span");
+          none.className = "none";
+          none.textContent = "—";
+          td.appendChild(none);
+        }
+        for (const image of images) {
+          const url = URL.createObjectURL(image.blob); // 保存した画像から、表示用の一時的なアドレスを作る
+          imageUrls.push(url);
+          const a = document.createElement("a");
+          a.href = url;
+          a.target = "_blank";
+          a.title = image.name;
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = image.name;
+          a.appendChild(img);
+          td.appendChild(a);
+        }
       }
     }
 

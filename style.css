@@ -65,6 +65,23 @@ button.star.on { color: #e6a700; }
 button.active { background: #1a5fb4; color: #fff; border-color: #1a5fb4; }
 #tag-filter button { margin: 2px 4px 2px 0; padding: 2px 10px; font-size: 0.9rem; }
 
+/* メモ画面の画像欄 */
+.message.error { color: #b00020; font-weight: bold; }
+.drop-zone {
+  margin: 10px 0;
+  padding: 14px;
+  border: 2px dashed #bbb;
+  border-radius: 6px;
+  color: #666;
+  text-align: center;
+}
+.drop-zone.over { border-color: #1a5fb4; background: #eef4ff; }
+.image-list { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.image-item { margin: 0; width: 170px; }
+.image-item img { max-width: 170px; max-height: 170px; display: block; border: 1px solid #ccc; }
+.image-item figcaption { font-size: 0.8rem; color: #555; word-break: break-all; margin: 4px 0; }
+.image-item button { padding: 2px 10px; font-size: 0.85rem; }
+
 /* メモ画面のリンク欄 */
 .link-row { padding: 4px 0; border-bottom: 1px dotted #ddd; }
 .link-row button { margin-left: 10px; padding: 2px 10px; font-size: 0.9rem; }

@@ -19,6 +19,7 @@
   <p>
     <button type="button" id="export">JSONに書き出す</button>
     <button type="button" id="import">JSONを読み込む</button>
+    <label class="inline-label"><input type="checkbox" id="export-images" checked> 書き出しに画像も含める（ファイルが大きくなります）</label>
     <input type="file" id="file" accept=".json,application/json" hidden>
   </p>
   <div class="message" id="message"></div>
@@ -53,9 +54,29 @@
     const message = document.getElementById("message");
 
     // 「JSONに書き出す」：全メモを1つのファイルとしてダウンロードする
+    // 画像（Blob）を、JSONに入れられる文字（データURL）にする
+    function blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    }
+
     document.getElementById("export").addEventListener("click", async () => {
       const memos = await MemoDB.getAll();
-      const data = { app: "exhibition-memo", version: 1, memos: memos };
+      // 画像も含める場合は、画像を文字に変えて入れる（version 2 から。画像がなければ、これまでと同じ形）
+      const withImages = document.getElementById("export-images").checked;
+      const images = withImages ? await MemoDB.getAllImages() : [];
+      const encoded = [];
+      for (const img of images) {
+        encoded.push({
+          id: img.id, memoId: img.memoId, name: img.name, type: img.type, createdAt: img.createdAt,
+          dataUrl: await blobToDataUrl(img.blob),
+        });
+      }
+      const data = { app: "exhibition-memo", version: 2, memos: memos, images: encoded };
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -63,7 +84,7 @@
       a.download = "memos-" + new Date().toISOString().slice(0, 10) + ".json";
       a.click();
       URL.revokeObjectURL(url);
-      message.textContent = memos.length + " 件を書き出しました";
+      message.textContent = memos.length + " 件のメモと、画像 " + encoded.length + " 枚を書き出しました";
     });
 
     // 「JSONを読み込む」：ボタンを押すとファイル選択が開く
@@ -87,9 +108,21 @@
           // 足りない項目は空のメモで補い、書き出し時より後に増えた項目にも対応する
           return { ...base, ...m, catalog: { ...base.catalog, ...m.catalog } };
         });
-        if (!confirm(memos.length + " 件を読み込みます。同じメモ（同じid）は読み込んだ内容で上書きされます。よろしいですか？")) return;
+        // 画像：データURLを、画像（Blob）に戻す。読み込むメモに属さない画像は、読み込まない
+        const memoIds = new Set(memos.map((m) => m.id));
+        const images = [];
+        for (const im of Array.isArray(data.images) ? data.images : []) {
+          if (!im.id || !im.dataUrl || !memoIds.has(im.memoId)) continue;
+          const blob = await (await fetch(im.dataUrl)).blob();
+          images.push({
+            id: im.id, memoId: im.memoId, name: im.name || "", type: im.type || blob.type, blob,
+            createdAt: im.createdAt || new Date().toISOString(),
+          });
+        }
+        if (!confirm(memos.length + " 件のメモと、画像 " + images.length + " 枚を読み込みます。同じメモ・同じ画像（同じid）は読み込んだ内容で上書きされます。よろしいですか？")) return;
         await MemoDB.saveMany(memos);
-        message.textContent = memos.length + " 件を読み込みました";
+        await MemoDB.saveImages(images);
+        message.textContent = memos.length + " 件のメモと、画像 " + images.length + " 枚を読み込みました";
         showList();
       } catch (err) {
         message.textContent = "読み込みに失敗しました：" + err.message;

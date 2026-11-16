@@ -6,14 +6,30 @@
 const MemoDB = (() => {
   const DB_NAME = "exhibition-memo"; // データベースの名前
   const STORE = "memos";             // メモを入れる「箱」の名前
+  const IMAGES = "images";           // 画像を入れる「箱」の名前
 
-  // データベースを開く（なければ作る）
+  // 画像を保存するときの上限
+  const MAX_SIDE = 1600;                    // 長辺がこれより大きければ縮小する（ピクセル）
+  const KEEP_AS_IS_BYTES = 1.5 * 1024 * 1024; // これ以下で、大きさも範囲内なら、そのまま保存する
+  const MAX_FILE_BYTES = 30 * 1024 * 1024;    // これより大きいファイルは受け付けない
+  const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+  // データベースを開く（なければ作る）。
+  // バージョンを 1 → 2 に上げて、画像の箱を足した（今まで保存したメモは、そのまま残る）
   function open() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
-      // 初めて作るときだけ呼ばれる：箱を用意し、idをキー（目印）にする
+      const req = indexedDB.open(DB_NAME, 2);
+      // 初めて作るとき、またはバージョンが上がったときだけ呼ばれる：足りない箱を用意する
       req.onupgradeneeded = () => {
-        req.result.createObjectStore(STORE, { keyPath: "id" });
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE, { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains(IMAGES)) {
+          // 画像は id で見つける。メモごとの画像を探せるように、memoId でも探せるようにしておく
+          const store = db.createObjectStore(IMAGES, { keyPath: "id" });
+          store.createIndex("memoId", "memoId");
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -68,9 +84,15 @@ const MemoDB = (() => {
     const idSet = new Set(ids);
     const db = await open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, "readwrite");
+      const tx = db.transaction([STORE, IMAGES], "readwrite");
       const store = tx.objectStore(STORE);
-      for (const id of ids) store.delete(id);
+      const imageStore = tx.objectStore(IMAGES);
+      for (const id of ids) {
+        store.delete(id);
+        // そのメモの画像も、いっしょに消す（メモがなくなった画像だけが残らないように）
+        const keys = imageStore.index("memoId").getAllKeys(IDBKeyRange.only(id));
+        keys.onsuccess = () => keys.result.forEach((key) => imageStore.delete(key));
+      }
       // 削除したあとに残っているメモを調べ、消えたメモへのリンクがあれば外して保存し直す
       const req = store.getAll();
       req.onsuccess = () => {
@@ -86,6 +108,54 @@ const MemoDB = (() => {
       tx.oncomplete = () => resolve(ids.length);
       tx.onerror = () => reject(tx.error);
     });
+  }
+
+  // ----- 画像 -----
+
+  // 画像の箱に対する、1回の操作（読む・書く）を行う共通の関数
+  async function runImages(mode, action) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IMAGES, mode);
+      const request = action(tx.objectStore(IMAGES));
+      tx.oncomplete = () => resolve(request ? request.result : undefined);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // 画像ファイルを、保存する形（Blob と種類）にそろえる。
+  // 大きい写真は、長辺 MAX_SIDE まで縮小して JPEG にする（保存の容量を抑えるため）。GIF はそのまま
+  async function prepareImage(file) {
+    if (!IMAGE_TYPES.includes(file.type)) {
+      throw new Error("「" + file.name + "」は、PNG・JPEG・WebP・GIF の画像ではありません");
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      throw new Error("「" + file.name + "」は大きすぎます（30MB まで）");
+    }
+    if (file.type === "image/gif") return { blob: file, type: file.type };
+
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file); // 画像を読み込む（壊れたファイルならここで失敗する）
+    } catch (e) {
+      throw new Error("「" + file.name + "」を画像として読み込めませんでした");
+    }
+    const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= KEEP_AS_IS_BYTES) {
+      bitmap.close();
+      return { blob: file, type: file.type }; // 小さい画像は、そのまま保存する
+    }
+    // 縮小して JPEG にする。背景が透明の PNG は、白い背景にする
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    return { blob, type: "image/jpeg" };
   }
 
   // 2つのメモ a, b の両方を書き換える共通の処理（リンクは双方向なので、両方に書く）。
@@ -132,6 +202,36 @@ const MemoDB = (() => {
     }),
     // a と b の間のリンクを解除する
     removeLink: (aId, bId) => updatePair(aId, bId, dropLinks),
+
+    // メモの画像を追加する（縮小などをしてから保存）。戻り値：保存した画像
+    // 画像は { id, memoId, name, type, blob, createdAt } の形で、メモとは別の箱に入れる
+    addImage: async (memoId, file) => {
+      const { blob, type } = await prepareImage(file);
+      const image = {
+        id: crypto.randomUUID(), memoId, name: file.name, type, blob,
+        createdAt: new Date().toISOString(),
+      };
+      await runImages("readwrite", (s) => s.put(image));
+      return image;
+    },
+    // メモの画像を、追加した順に返す
+    getImages: async (memoId) => {
+      const images = await runImages("readonly", (s) => s.index("memoId").getAll(IDBKeyRange.only(memoId)));
+      return images.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+    removeImage: (id) => runImages("readwrite", (s) => s.delete(id)),
+    // 全部の画像（JSON の書き出し用）
+    getAllImages: () => runImages("readonly", (s) => s.getAll()),
+    // 画像をまとめて保存する（JSON の読み込み用）
+    saveImages: async (images) => {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IMAGES, "readwrite");
+        for (const image of images) tx.objectStore(IMAGES).put(image);
+        tx.oncomplete = () => resolve(images.length);
+        tx.onerror = () => reject(tx.error);
+      });
+    },
     // お気に入りの付け外し。更新日時は変えない（一覧の並び順が動かないようにするため）
     setFavorite: async (id, value) => {
       const db = await open();
