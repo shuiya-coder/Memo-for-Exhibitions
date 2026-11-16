@@ -58,6 +58,33 @@ const MemoDB = (() => {
     };
   }
 
+  // 複数のメモをまとめて削除する。
+  // あわせて、残ったメモの中にある「削除したメモへのリンク」も取り除く
+  // （リンクは { targetId, type } の形。リンクだけが残ると、存在しないメモを指してしまうため）
+  async function removeMany(ids) {
+    const idSet = new Set(ids);
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const store = tx.objectStore(STORE);
+      for (const id of ids) store.delete(id);
+      // 削除したあとに残っているメモを調べ、消えたメモへのリンクがあれば外して保存し直す
+      const req = store.getAll();
+      req.onsuccess = () => {
+        for (const m of req.result) {
+          const links = m.links || [];
+          const kept = links.filter((l) => !idSet.has(l.targetId));
+          if (kept.length !== links.length) {
+            m.links = kept; // 更新日時は変えない（内容を直したわけではないため）
+            store.put(m);
+          }
+        }
+      };
+      tx.oncomplete = () => resolve(ids.length);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   return {
     create,
     getAll: () => run("readonly", (s) => s.getAll()),
@@ -67,7 +94,8 @@ const MemoDB = (() => {
       memo.updatedAt = new Date().toISOString();
       return run("readwrite", (s) => s.put(memo));
     },
-    remove: (id) => run("readwrite", (s) => s.delete(id)),
+    remove: (id) => removeMany([id]),
+    removeMany,
     // 複数のメモをまとめて保存する（読み込み用）。updatedAt は元の値のまま残す
     saveMany: async (memos) => {
       const db = await open();

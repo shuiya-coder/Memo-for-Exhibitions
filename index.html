@@ -32,6 +32,15 @@
   <div id="tag-filter"></div>
 
   <p id="count"></p>
+
+  <!-- まとめて削除：メモの左のチェックで選び、「選択したメモを削除」で消す -->
+  <p id="bulk">
+    <button type="button" id="select-all">表示中のメモをすべて選択</button>
+    <button type="button" id="clear-selection">選択を解除</button>
+    <button type="button" id="delete-selected" class="danger">選択したメモを削除</button>
+    <span id="selected-count"></span>
+  </p>
+
   <div id="list"></div>
 
   <script src="db.js"></script>
@@ -135,6 +144,50 @@
       }
     }
 
+    // ----- まとめて削除 -----
+    // チェックされたメモのid。検索やタグで表示が変わっても、見えているメモの分は残る
+    const selected = new Set();
+    // 今、画面に出ているメモ（「すべて選択」の対象）
+    let visibleMemos = [];
+
+    // 選んだ件数の表示と、ボタンの使える・使えないを更新する
+    function updateBulk() {
+      document.getElementById("selected-count").textContent =
+        selected.size ? selected.size + " 件を選択中" : "";
+      document.getElementById("delete-selected").disabled = selected.size === 0;
+      document.getElementById("clear-selection").disabled = selected.size === 0;
+      document.getElementById("select-all").disabled = visibleMemos.length === 0;
+    }
+
+    document.getElementById("select-all").addEventListener("click", () => {
+      visibleMemos.forEach((m) => selected.add(m.id));
+      showList();
+    });
+
+    document.getElementById("clear-selection").addEventListener("click", () => {
+      selected.clear();
+      showList();
+    });
+
+    document.getElementById("delete-selected").addEventListener("click", async () => {
+      // 画面に見えているメモだけを削除の対象にする（見えていないメモを巻き込まないため）
+      const targets = visibleMemos.filter((m) => selected.has(m.id));
+      if (targets.length === 0) return;
+
+      // 確認ダイアログには、件数と、先頭の数件の作品名を出す
+      const names = targets.slice(0, 5).map((m) => "・" + (m.title || "（作品名なし）")).join("\n");
+      const more = targets.length > 5 ? "\n…ほか " + (targets.length - 5) + " 件" : "";
+      const ok = confirm(
+        targets.length + " 件のメモを削除します。元に戻せません。\n\n" + names + more +
+        "\n\n心配なら、先に「JSONに書き出す」でバックアップできます。\nよろしいですか？");
+      if (!ok) return;
+
+      await MemoDB.removeMany(targets.map((m) => m.id));
+      targets.forEach((m) => selected.delete(m.id));
+      message.textContent = targets.length + " 件のメモを削除しました";
+      showList();
+    });
+
     // 一覧を表示する
     async function showList() {
       const allMemos = await MemoDB.getAll();
@@ -145,6 +198,11 @@
       const query = document.getElementById("search").value;
       const memos = allMemos.filter((m) =>
         (!selectedTag || m.tags.includes(selectedTag)) && matchesQuery(m, query));
+
+      // 絞り込みで見えなくなったメモは、選択から外す
+      visibleMemos = memos;
+      const visibleIds = new Set(memos.map((m) => m.id));
+      for (const id of [...selected]) if (!visibleIds.has(id)) selected.delete(id);
 
       const filtered = selectedTag || query.trim();
       document.getElementById("count").textContent = filtered
@@ -161,7 +219,17 @@
         const a = document.createElement("a");
         a.href = "memo.html?id=" + encodeURIComponent(m.id);
         a.textContent = m.title || "（作品名なし）";
-        h2.appendChild(a);
+        // 削除用のチェックボックス
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = selected.has(m.id);
+        cb.title = "このメモを選ぶ";
+        cb.addEventListener("change", () => {
+          if (cb.checked) selected.add(m.id); else selected.delete(m.id);
+          updateBulk();
+        });
+        cb.style.marginRight = "8px";
+        h2.append(cb, a);
 
         const sub = document.createElement("div");
         sub.className = "sub";
@@ -181,6 +249,7 @@
         div.append(h2, sub, tags);
         list.appendChild(div);
       }
+      updateBulk();
     }
     // 検索ボックスに入力するたびに一覧を更新する
     document.getElementById("search").addEventListener("input", showList);
