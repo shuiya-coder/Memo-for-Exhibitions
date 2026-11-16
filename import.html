@@ -64,6 +64,9 @@
     <div id="register-box" hidden>
       <label for="exhibition-name">展覧会名（必須）</label>
       <input type="text" id="exhibition-name" placeholder="PDFの展覧会の正式な名前を入力">
+      <label for="view-date">鑑賞日（任意）</label>
+      <input type="date" id="view-date">
+      <p class="note">入れると、登録するすべてのメモに同じ鑑賞日が入ります。あとで、メモごとに画面で変えられます。</p>
       <label for="common-tags">全部のメモに付けるタグ（任意。「、」で区切る）</label>
       <input type="text" id="common-tags" placeholder="例：展覧会名の略称、2026年">
       <label for="fill-holder">所蔵者が空欄のときに入れる文字（任意）</label>
@@ -243,6 +246,7 @@
           .split(/[,、，]/).map((t) => t.trim().replace(/^[#＃]+/, "")).filter(Boolean)
       )];
       const fillHolder = document.getElementById("fill-holder").value.trim();
+      const viewDate = document.getElementById("view-date").value; // 空なら、鑑賞日なしで登録
 
       // すでに同じメモ（展覧会名・No.・作品名が同じ）があれば、重複を避けるため登録しない
       const existing = await MemoDB.getAll();
@@ -259,6 +263,7 @@
         const m = MemoDB.create();
         m.title = title;
         m.exhibition = exhibition;
+        m.viewDate = viewDate; // 参考文献は、ここでは入れない（メモ画面で手入力する）
         m.catalog = {
           no: r.no,
           designation: r.designation.trim(),

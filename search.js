@@ -9,7 +9,7 @@ function normalize(text) {
 // メモの中の検索対象の文字を、1つにつなげる
 function searchText(m) {
   return normalize([
-    m.title, m.exhibition, m.body,
+    m.title, m.exhibition, m.body, m.viewDate, m.references, // 古いメモでは未設定のことがある（空として扱われる）
     ...Object.values(m.catalog), // 目録番号・指定・作者・時代・制作地・員数・所蔵者・章
     ...m.tags,
   ].join("\n"));

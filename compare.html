@@ -63,7 +63,9 @@
       ["所蔵者", (m) => m.catalog.holder],
       ["章・区分", (m) => m.catalog.section],
       ["タグ", (m) => m.tags.join("、")],
+      ["鑑賞日", (m) => m.viewDate],
       ["メモ", (m) => m.body, "body"], // 3つ目は、セルに付ける class（長い文章用）
+      ["参考文献", (m) => m.references, "body"],
     ];
 
     async function render() {

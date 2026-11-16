@@ -17,6 +17,9 @@
     <label for="exhibition">展覧会名</label>
     <input type="text" id="exhibition">
 
+    <label for="viewDate">鑑賞日（任意）</label>
+    <input type="date" id="viewDate">
+
     <fieldset>
       <legend>出品目録の情報</legend>
       <label for="no">目録番号</label>
@@ -45,6 +48,9 @@
 
     <label for="body">メモ</label>
     <textarea id="body" rows="8"></textarea>
+
+    <label for="references">参考文献（任意）</label>
+    <textarea id="references" rows="4" placeholder="図録、論文、ウェブページなど。1行に1件ずつ書くと見やすくなります"></textarea>
 
     <!-- リンク：同じ作品のメモ、関連する作品のメモをつなぐ。変更はその場で保存される -->
     <fieldset id="links-box">
@@ -293,6 +299,9 @@
       document.getElementById("title").value = memo.title;
       document.getElementById("exhibition").value = memo.exhibition;
       document.getElementById("body").value = memo.body;
+      // 鑑賞日と参考文献は後から増えた項目なので、古いメモでは未設定（undefined）のことがある
+      document.getElementById("viewDate").value = memo.viewDate || "";
+      document.getElementById("references").value = memo.references || "";
       for (const f of CATALOG_FIELDS) {
         document.getElementById(f).value = memo.catalog[f] || "";
       }
@@ -315,6 +324,8 @@
       memo.title = document.getElementById("title").value.trim();
       memo.exhibition = document.getElementById("exhibition").value.trim();
       memo.body = document.getElementById("body").value;
+      memo.viewDate = document.getElementById("viewDate").value;
+      memo.references = document.getElementById("references").value;
       for (const f of CATALOG_FIELDS) {
         memo.catalog[f] = document.getElementById(f).value.trim();
       }
