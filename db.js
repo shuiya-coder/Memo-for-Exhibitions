@@ -85,8 +85,50 @@ const MemoDB = (() => {
     });
   }
 
+  // 2つのメモ a, b の両方を書き換える共通の処理（リンクは双方向なので、両方に書く）。
+  // 変更するのは links だけで、ほかの項目（編集中の内容など）には触らない。
+  // 戻り値：a の新しい links
+  async function updatePair(aId, bId, change) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const store = tx.objectStore(STORE);
+      let aLinks = [];
+      const ra = store.get(aId);
+      ra.onsuccess = () => {
+        const rb = store.get(bId);
+        rb.onsuccess = () => {
+          const a = ra.result, b = rb.result;
+          if (!a || !b) { tx.abort(); return; } // どちらかがなければ何もしない
+          change(a, b);
+          store.put(a);
+          store.put(b);
+          aLinks = a.links;
+        };
+      };
+      tx.oncomplete = () => resolve(aLinks);
+      tx.onabort = () => reject(new Error("リンク先のメモが見つかりません"));
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // a と b の間のリンクをすべて取り除く（種類を変えるときにも使う）
+  function dropLinks(a, b) {
+    a.links = (a.links || []).filter((l) => l.targetId !== b.id);
+    b.links = (b.links || []).filter((l) => l.targetId !== a.id);
+  }
+
   return {
     create,
+    // a と b をリンクする。type は "same"（同一作品）か "related"（関連作品）。
+    // すでにリンクがあれば、種類を置き換える（2つのメモの間のリンクは1つだけ）
+    addLink: (aId, bId, type) => updatePair(aId, bId, (a, b) => {
+      dropLinks(a, b);
+      a.links.push({ targetId: b.id, type });
+      b.links.push({ targetId: a.id, type });
+    }),
+    // a と b の間のリンクを解除する
+    removeLink: (aId, bId) => updatePair(aId, bId, dropLinks),
     getAll: () => run("readonly", (s) => s.getAll()),
     get: (id) => run("readonly", (s) => s.get(id)),
     // 保存（同じidがあれば上書き、なければ追加）

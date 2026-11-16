@@ -46,6 +46,33 @@
     <label for="body">メモ</label>
     <textarea id="body" rows="8"></textarea>
 
+    <!-- リンク：同じ作品のメモ、関連する作品のメモをつなぐ。変更はその場で保存される -->
+    <fieldset id="links-box">
+      <legend>リンク</legend>
+      <p id="links-hint" hidden>このメモを一度「保存」すると、リンクを追加できます。</p>
+      <div id="links-body">
+        <p class="note">リンクの追加・解除は、「保存」を押さなくても、すぐに保存されます。</p>
+        <h3>同じ作品のメモ（同一作品）</h3>
+        <div id="same-list"></div>
+        <h3>関連作品のメモ</h3>
+        <div id="related-list"></div>
+
+        <h3>リンクを追加</h3>
+        <p>
+          <input type="text" id="link-search" placeholder="作品名・展覧会名などで探す">
+        </p>
+        <p>
+          つなぎ方：
+          <select id="link-type">
+            <option value="same">同一作品</option>
+            <option value="related">関連作品</option>
+          </select>
+        </p>
+        <div id="link-candidates"></div>
+        <div class="message" id="link-message"></div>
+      </div>
+    </fieldset>
+
     <!-- PDFから取り込んだメモだけに出す：取り込み元と元のテキスト（読み取り専用） -->
     <details id="source-box" hidden>
       <summary>取り込み元の情報</summary>
@@ -61,6 +88,7 @@
   </form>
 
   <script src="db.js"></script>
+  <script src="search.js"></script>
   <script>
     // 目録情報の入力欄のid（memo.catalog の項目名と同じ）
     const CATALOG_FIELDS = ["no", "designation", "author", "period", "place", "quantity", "holder", "section"];
@@ -121,6 +149,147 @@
       }
     }
 
+    // ----- リンク -----
+    // 「同一作品」（same）と「関連作品」（related）。メモには { targetId, type } の形で入っている。
+    // 同一作品：つながりをたどる（A=B、B=C なら A=C）。関連作品：直接つないだものだけ。
+    let isSaved = false; // このメモが保存済みか（新規は、最初の保存まで false）
+    let allMemos = [];   // 全メモ（相手を探すため）
+
+    // 一覧用の説明：作品名 ／ 展覧会名 ／ No.
+    function describe(m) {
+      return [m.title || "（作品名なし）", m.exhibition, m.catalog.no ? "No." + m.catalog.no : ""]
+        .filter(Boolean).join(" ／ ");
+    }
+
+    // リンクの1行（メモへのリンク、補足、ボタン）を作る
+    function linkRow(m, note, buttonLabel, onClick) {
+      const div = document.createElement("div");
+      div.className = "link-row";
+      const a = document.createElement("a");
+      a.href = "memo.html?id=" + encodeURIComponent(m.id);
+      a.textContent = describe(m);
+      div.appendChild(a);
+      if (note) {
+        const s = document.createElement("span");
+        s.className = "sub";
+        s.textContent = " " + note;
+        div.appendChild(s);
+      }
+      if (buttonLabel) {
+        const b = document.createElement("button");
+        b.type = "button"; // フォームの送信ボタンにならないようにする
+        b.textContent = buttonLabel;
+        b.addEventListener("click", onClick);
+        div.appendChild(b);
+      }
+      return div;
+    }
+
+    // 同一作品のつながりをたどって、{ メモのid → 直接つながっているメモのid } を返す。
+    // 直接つないだメモは自分自身、間接のメモは、経由したメモのid が入る
+    function findSameGroup(byId, startId) {
+      const via = new Map();
+      const queue = [];
+      for (const l of byId.get(startId).links || []) {
+        if (l.type === "same" && byId.has(l.targetId)) { via.set(l.targetId, l.targetId); queue.push(l.targetId); }
+      }
+      while (queue.length) {
+        const id = queue.shift();
+        for (const l of byId.get(id).links || []) {
+          if (l.type === "same" && l.targetId !== startId && byId.has(l.targetId) && !via.has(l.targetId)) {
+            via.set(l.targetId, via.get(id)); // 経由は、最初に直接つながっているメモ
+            queue.push(l.targetId);
+          }
+        }
+      }
+      return via;
+    }
+
+    // リンクの欄を、最新の内容で表示し直す
+    async function refreshLinks() {
+      allMemos = await MemoDB.getAll();
+      const byId = new Map(allMemos.map((m) => [m.id, m]));
+      const self = byId.get(memo.id);
+      if (!self) return;
+      memo.links = self.links || []; // 自分のリンクは、保存されている最新のものに合わせる
+
+      const unlink = (m) => async () => {
+        memo.links = await MemoDB.removeLink(memo.id, m.id);
+        document.getElementById("link-message").textContent = "リンクを解除しました";
+        refreshLinks();
+      };
+
+      // 同一作品
+      const sameBox = document.getElementById("same-list");
+      sameBox.innerHTML = "";
+      const via = findSameGroup(byId, memo.id);
+      for (const [id, viaId] of via) {
+        const m = byId.get(id);
+        if (id === viaId) sameBox.appendChild(linkRow(m, "", "解除", unlink(m)));
+        else sameBox.appendChild(linkRow(m, "（" + describe(byId.get(viaId)) + " を経由）", "", null));
+      }
+      if (via.size === 0) sameBox.textContent = "なし";
+
+      // 関連作品（直接つないだものだけ）
+      const relatedBox = document.getElementById("related-list");
+      relatedBox.innerHTML = "";
+      let relatedCount = 0;
+      for (const l of memo.links) {
+        const m = byId.get(l.targetId);
+        if (l.type !== "related" || !m) continue;
+        relatedBox.appendChild(linkRow(m, "", "解除", unlink(m)));
+        relatedCount++;
+      }
+      if (relatedCount === 0) relatedBox.textContent = "なし";
+
+      showCandidates();
+    }
+
+    // 「リンクを追加」の候補を表示する。
+    // 言葉が入力されていれば検索、空なら「作品名が同じメモ」を出す（別の展覧会の同じ作品を見つけやすい）
+    function showCandidates() {
+      const query = document.getElementById("link-search").value;
+      const linked = new Set(memo.links.map((l) => l.targetId)); // すでに直接つないだメモ
+      const others = allMemos.filter((m) => m.id !== memo.id && !linked.has(m.id));
+
+      let list, heading = "";
+      if (query.trim()) {
+        list = others.filter((m) => matchesQuery(m, query));
+      } else {
+        const title = normalize(memo.title.trim());
+        list = title ? others.filter((m) => normalize(m.title.trim()) === title) : [];
+        heading = list.length ? "作品名が同じメモ：" : "言葉を入力して探してください";
+      }
+
+      const box = document.getElementById("link-candidates");
+      box.innerHTML = "";
+      if (heading) box.append(heading);
+      if (query.trim() && list.length === 0) box.append("見つかりませんでした");
+      for (const m of list.slice(0, 20)) {
+        box.appendChild(linkRow(m, "", "追加", async () => {
+          const type = document.getElementById("link-type").value;
+          memo.links = await MemoDB.addLink(memo.id, m.id, type);
+          document.getElementById("link-message").textContent =
+            "「" + (m.title || "（作品名なし）") + "」を" + (type === "same" ? "同一作品" : "関連作品") + "としてつなぎました";
+          refreshLinks();
+        }));
+      }
+      if (list.length > 20) box.append("（上位 20 件を表示。言葉を足して絞り込んでください）");
+    }
+
+    // リンク欄の表示：保存前の新規メモでは、案内だけを出す
+    function showLinksBox() {
+      document.getElementById("links-hint").hidden = isSaved;
+      document.getElementById("links-body").hidden = !isSaved;
+      if (isSaved) refreshLinks();
+    }
+
+    const linkSearch = document.getElementById("link-search");
+    linkSearch.addEventListener("input", showCandidates);
+    linkSearch.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") e.preventDefault(); // 保存（フォーム送信）を防ぐ
+    });
+
     // 画面を開いたときの処理
     async function init() {
       if (params.get("new")) {
@@ -150,6 +319,8 @@
         document.getElementById("raw-text").textContent = memo.rawText;
         document.getElementById("source-box").hidden = false;
       }
+      isSaved = !params.get("new"); // 新規は、最初の保存が終わるまで未保存
+      showLinksBox();
     }
 
     // 「保存」ボタン
@@ -163,7 +334,13 @@
       for (const f of CATALOG_FIELDS) {
         memo.catalog[f] = document.getElementById(f).value.trim();
       }
+      // リンクは別の操作でその場で保存されるので、保存されている最新のリンクを引き継ぐ
+      // （古いリンクで上書きして、つないだリンクが消えるのを防ぐ）
+      const current = await MemoDB.get(memo.id);
+      if (current) memo.links = current.links || [];
       await MemoDB.save(memo);
+      isSaved = true;
+      showLinksBox(); // 新規メモは、ここでリンク欄が使えるようになる
       // 新規だった場合は、保存後に「編集」用のアドレスへ切り替える
       history.replaceState(null, "", "memo.html?id=" + encodeURIComponent(memo.id));
       document.getElementById("delete").hidden = false;

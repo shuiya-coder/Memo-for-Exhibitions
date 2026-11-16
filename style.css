@@ -52,6 +52,12 @@ button.danger { color: #b00020; border-color: #b00020; }
 button.active { background: #1a5fb4; color: #fff; border-color: #1a5fb4; }
 #tag-filter button { margin: 2px 4px 2px 0; padding: 2px 10px; font-size: 0.9rem; }
 
+/* メモ画面のリンク欄 */
+.link-row { padding: 4px 0; border-bottom: 1px dotted #ddd; }
+.link-row button { margin-left: 10px; padding: 2px 10px; font-size: 0.9rem; }
+.note { color: #555; font-size: 0.9rem; }
+#links-box h3 { font-size: 1rem; margin: 14px 0 4px; }
+
 /* 編集フォーム */
 label { display: block; margin-top: 12px; font-weight: bold; }
 input[type="text"], textarea {
