@@ -327,5 +327,8 @@ const CatalogParser = (() => {
     return { rows: result, leftovers };
   }
 
-  return { FIELD_LABELS, DEFAULT_COLUMNS, detectColumns, buildColumns, guessField, parsePage };
+  return {
+    FIELD_LABELS, DEFAULT_COLUMNS, detectColumns, buildColumns, guessField, parsePage,
+    groupLines, joinLine, // 段組みカード形式（card-import.js）でも使う
+  };
 })();

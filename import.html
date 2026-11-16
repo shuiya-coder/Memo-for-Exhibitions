@@ -12,6 +12,14 @@
     .line .cell { background: #eef4ff; margin-right: 6px; padding: 0 4px; }
     .line .x { color: #1a5fb4; font-size: 0.75rem; }
     textarea.raw { height: 12em; font-family: monospace; }
+    /* 段組みカード形式の確認用：作品のまとまりを、交互に色を変えて並べる */
+    .card { border: 1px solid #ccc; border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+    .card:nth-child(odd) { background: #f4f8ff; }
+    .card:nth-child(even) { background: #fffaf0; }
+    .card .head { font-weight: bold; }
+    .card .line { font-size: 0.9rem; }
+    .card .size { color: #999; font-size: 0.75rem; margin-left: 8px; }
+    .card .chapter { color: #8a4b00; font-size: 0.85rem; }
     #columns-editor input { width: 5em; }
     #columns-editor td { vertical-align: middle; }
     .message.error { color: #b00020; font-weight: bold; }
@@ -24,6 +32,7 @@
     table.result th { background: #f4f4f4; }
     /* 作品名が空のセル：セルも中の入力欄も、はっきりした赤にする */
     td.empty { background: #e04040; }
+    td.warn { background: #ffe08a; }
     td.empty input { background: #ff9a9a; }
     /* 登録の結果は、ボタンのすぐ下に出す（上のほうだと、表が長くて見えないため） */
     #register-message { font-weight: bold; min-height: 1.5em; }
@@ -49,6 +58,45 @@
     <button type="button" id="show">表示</button>
   </p>
   <div class="message" id="message"></div>
+
+  <!-- 目録の形式：PDFを読み込むと表示される -->
+  <section id="format-section" hidden>
+    <h2>目録の形式</h2>
+    <p>
+      <label class="inline-label"><input type="radio" name="format" value="table" checked> 表形式（作品が行と列に並んでいる）</label><br>
+      <label class="inline-label"><input type="radio" name="format" value="card"> 段組みカード形式（作品ごとのまとまりが、縦の段に並んでいる）</label>
+    </p>
+  </section>
+
+  <!-- 段組みカード形式：作品のまとまりに区切って、確認する（項目への分け方は、次のステップ） -->
+  <section id="card-section" hidden>
+    <h2>段組みカード形式での読み取り（確認用）</h2>
+    <p>
+      作品番号（大きい数字）を手がかりに、ページを縦の段に分け、「番号から次の番号まで」を
+      1作品のまとまりとして区切ります。まず、区切りが正しいかを確認してください。
+      作品名・所蔵者などの項目への分け方は、次のステップで作ります。
+    </p>
+    <details>
+      <summary>詳しい設定</summary>
+      <label for="card-number-ratio">作品番号の文字の大きさ（数字のうち最大のものに対する割合）</label>
+      <input type="number" id="card-number-ratio" min="0.3" max="1" step="0.05" style="width: 6em">
+      <label for="card-chapter-pattern">章の見出しの行を見つける言葉（正規表現）</label>
+      <input type="text" id="card-chapter-pattern">
+      <label for="card-quantity-pattern">員数の行を見つける言葉（正規表現。行の最初の文字に当てはめる）</label>
+      <input type="text" id="card-quantity-pattern">
+      <label for="card-term-pattern">展示期間の行を見つける言葉（正規表現。取り込まない行）</label>
+      <input type="text" id="card-term-pattern">
+      <label for="card-continuation-pattern">年号・西暦の折り返しの行を見つける言葉（正規表現）</label>
+      <input type="text" id="card-continuation-pattern">
+    </details>
+    <p>
+      <button type="button" id="card-parse">作品のまとまりを確認する</button>
+      <button type="button" id="card-extract">項目に分けて、確認・登録へ進む</button>
+    </p>
+    <div class="message" id="card-message"></div>
+    <div id="card-summary"></div>
+    <div id="card-blocks"></div>
+  </section>
 
   <!-- 5-2：全ページを作品ごとに分けて、表で確認する -->
   <section id="parse-section" hidden>
@@ -88,6 +136,11 @@
       <div class="message" id="header-message"></div>
     </details>
     <p><button type="button" id="parse">全ページを作品に分ける</button></p>
+  </section>
+
+  <!-- 読み取り結果：表形式でも、段組みカード形式でも、ここに結果が出る（確認・修正して、メモとして登録する） -->
+  <section id="result-section" hidden>
+    <h2>読み取り結果の確認と登録</h2>
     <div id="summary"></div>
     <div style="overflow-x: auto">
       <table id="result" class="result"></table>
@@ -125,6 +178,7 @@
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
   <script src="db.js"></script>
   <script src="pdf-import.js"></script>
+  <script src="card-import.js"></script>
   <script>
     const message = document.getElementById("message");
     let pdf = null; // 読み込んだPDF
@@ -315,7 +369,7 @@
       // transform[4] が x（右へ）、transform[5] が y（上へ。PDFは下が0）、width が幅
       return content.items
         .filter((it) => it.str.trim() !== "")
-        .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }));
+        .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width, h: it.height }));
     }
 
     // 全ページを作品に分けて、表で見せる
@@ -390,7 +444,7 @@
       // 表：マウスを No. の上に置くと、その作品に割り当てた元のテキストが出る
       const COLS = [
         ["no", "No."], ["designation", "指定"], ["title", "作品名"], ["author", "作者名"],
-        ["period", "時代"], ["place", "制作地"], ["quantity", "員数"], ["holder", "所蔵者"], ["section", "章"], ["page", "頁"],
+        ["period", "時代"], ["place", "制作地"], ["quantity", "員数"], ["holder", "所蔵者"], ["section", "章"], ["page", "頁"], ["note", "要確認"],
       ];
       const table = document.getElementById("result");
       table.innerHTML = "";
@@ -413,9 +467,10 @@
 
         for (const [key] of COLS) {
           const td = tr.insertCell();
-          if (key === "no" || key === "page") {
+          if (key === "no" || key === "page" || key === "note") {
             // 番号とページは直さない。No. にマウスを置くと、元のテキストが出る
-            td.textContent = r[key];
+            td.textContent = r[key] || ""; // 表形式の結果には、要確認（note）がない
+            if (key === "note" && r.note) td.className = "warn"; // 要確認の理由があれば、目立たせる
             if (key === "no") td.title = r.rawText;
             continue;
           }
@@ -431,6 +486,7 @@
           td.appendChild(input);
         }
       }
+      document.getElementById("result-section").hidden = false;
       document.getElementById("register-box").hidden = false;
     }
 
@@ -521,10 +577,159 @@
       });
     });
 
-    // PDFを読み込んだら、分割のメニューを出す（読み込み処理の最後で呼ぶ）
+    // PDFを読み込んだら、形式の選択と、分割のメニューを出す（読み込み処理の最後で呼ぶ）
     function showParseSection() {
-      document.getElementById("parse-section").hidden = false;
+      document.getElementById("format-section").hidden = false;
+      applyFormat();
     }
+
+    // 選んだ形式に合わせて、表形式かカード形式かの、どちらかのメニューを出す
+    function applyFormat() {
+      const format = document.querySelector('input[name="format"]:checked').value;
+      document.getElementById("parse-section").hidden = format !== "table";
+      document.getElementById("card-section").hidden = format !== "card";
+    }
+    document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListener("change", applyFormat));
+
+    // ----- 段組みカード形式 -----
+    document.getElementById("card-number-ratio").value = CardParser.DEFAULT_OPTIONS.numberSizeRatio;
+    document.getElementById("card-chapter-pattern").value = CardParser.DEFAULT_OPTIONS.chapterPattern;
+    document.getElementById("card-quantity-pattern").value = CardParser.DEFAULT_OPTIONS.quantityPattern;
+    document.getElementById("card-term-pattern").value = CardParser.DEFAULT_OPTIONS.termPattern;
+    document.getElementById("card-continuation-pattern").value = CardParser.DEFAULT_OPTIONS.continuationPattern;
+    let cardBlocks = []; // 区切った作品のまとまり（項目に分けて、確認用の表に出す）
+
+    // 画面の設定を、読み取りの設定として集める。正規表現が間違っていれば、ここでエラーにして知らせる
+    function cardOptions() {
+      const options = {
+        numberSizeRatio: Number(document.getElementById("card-number-ratio").value),
+        chapterPattern: document.getElementById("card-chapter-pattern").value,
+        quantityPattern: document.getElementById("card-quantity-pattern").value,
+        termPattern: document.getElementById("card-term-pattern").value,
+        continuationPattern: document.getElementById("card-continuation-pattern").value,
+      };
+      for (const key of ["chapterPattern", "quantityPattern", "termPattern", "continuationPattern"]) {
+        new RegExp(options[key]);
+      }
+      return options;
+    }
+
+    // 全ページを、作品のまとまりに区切って、確認用に表示する
+    async function parseCardPages() {
+      const cardMessage = document.getElementById("card-message");
+      cardMessage.className = "message";
+      const options = cardOptions();
+
+      const state = { chapter: "", lastNo: 0 };
+      cardBlocks = [];
+      const ignored = [];
+      const rejected = [];
+      const pageInfos = [];
+      for (let n = 1; n <= pdf.numPages; n++) {
+        cardMessage.textContent = n + " / " + pdf.numPages + " ページを解析中…";
+        const r = CardParser.parsePage(await loadItems(n), options, state, n);
+        cardBlocks.push(...r.blocks);
+        ignored.push(...r.ignored);
+        r.rejected.forEach((s) => rejected.push("p" + n + "：" + s));
+        pageInfos.push("ページ " + n + "：段 " + r.lefts.length + " 個（左端 x = " +
+          r.lefts.map((x) => x.toFixed(1)).join("、") + "）、作品 " + r.blocks.length +
+          " 件、作品番号の文字の高さ " + r.height.toFixed(1));
+      }
+      cardMessage.textContent = "解析しました";
+      showCardResult(ignored, rejected, pageInfos);
+    }
+
+    // 区切った結果を、まとめと、作品ごとのまとまりで表示する
+    function showCardResult(ignored, rejected, pageInfos) {
+      // まとめ：作品の数、番号の抜け・重なり
+      const numbers = cardBlocks.map((b) => Number(b.no));
+      const seen = new Set();
+      const dup = [];
+      for (const n of numbers) { if (seen.has(n)) dup.push(n); seen.add(n); }
+      const missing = [];
+      for (let n = 1; n <= Math.max(0, ...numbers); n++) if (!seen.has(n)) missing.push(n);
+      const empty = cardBlocks.filter((b) => b.lines.length === 0).map((b) => b.no);
+
+      const summary = document.getElementById("card-summary");
+      summary.innerHTML = "";
+      const add = (text) => { const d = document.createElement("div"); d.textContent = text; summary.appendChild(d); };
+      add(cardBlocks.length + " 件の作品のまとまりに区切りました。");
+      add("抜けている番号：" + (missing.length ? missing.join("、") : "なし"));
+      add("重なっている番号：" + (dup.length ? dup.join("、") : "なし"));
+      add("中身が空のまとまり：" + (empty.length ? "No. " + empty.join("、") : "なし"));
+      add("作品の外とした行：" + ignored.length + " 行／作品番号とみなさなかった数字：" + rejected.length + " 個");
+
+      const detail = (title, lines) => {
+        if (lines.length === 0) return;
+        const d = document.createElement("details");
+        const s = document.createElement("summary");
+        s.textContent = title;
+        const pre = document.createElement("pre");
+        pre.textContent = lines.join("\n");
+        d.append(s, pre);
+        summary.appendChild(d);
+      };
+      detail("ページごとの段と作品数を見る", pageInfos);
+      detail("作品の外とした行を見る（ページ上部の説明などのはず）", ignored.map((l) =>
+        "p" + l.page + (l.column ? " 段" + l.column : "") + " y=" + l.y.toFixed(0) + " [" + l.reason + "] " + l.text));
+      detail("作品番号とみなさなかった数字を見る", rejected);
+
+      // 作品のまとまり：色を交互に変えて並べる。文字の大きさ（小さい灰色の数字）も出す
+      const box = document.getElementById("card-blocks");
+      box.innerHTML = "";
+      for (const b of cardBlocks) {
+        const card = document.createElement("div");
+        card.className = "card";
+        const head = document.createElement("div");
+        head.className = "head";
+        head.textContent = "No. " + b.no + "　（ページ " + b.page + "・段 " + b.column + "・" + b.lines.length + " 行）";
+        card.appendChild(head);
+        if (b.section) {
+          const ch = document.createElement("div");
+          ch.className = "chapter";
+          ch.textContent = "章：" + b.section;
+          card.appendChild(ch);
+        }
+        for (const l of b.lines) {
+          const line = document.createElement("div");
+          line.className = "line";
+          line.append(l.text);
+          const size = document.createElement("span");
+          size.className = "size";
+          size.textContent = l.h.toFixed(1);
+          line.appendChild(size);
+          card.appendChild(line);
+        }
+        box.appendChild(card);
+      }
+    }
+
+    // 作品のまとまりを項目に分けて、確認用の表（登録できる）に出す
+    async function extractCardFields() {
+      await parseCardPages(); // 設定を変えたあとでも、最新の設定で区切り直す
+      const options = cardOptions();
+      parsedRows = cardBlocks.map((b) => CardParser.extractFields(b, options));
+      showResult([]);
+      document.getElementById("result-section").scrollIntoView();
+    }
+
+    document.getElementById("card-extract").addEventListener("click", () => {
+      extractCardFields().catch((err) => {
+        const cardMessage = document.getElementById("card-message");
+        cardMessage.className = "message error";
+        cardMessage.textContent = "項目への分割に失敗しました：" + err.message;
+        console.error(err);
+      });
+    });
+
+    document.getElementById("card-parse").addEventListener("click", () => {
+      parseCardPages().catch((err) => {
+        const cardMessage = document.getElementById("card-message");
+        cardMessage.className = "message error";
+        cardMessage.textContent = "解析に失敗しました：" + err.message;
+        console.error(err);
+      });
+    });
 
     // PDF.js の裏方プログラム（worker）の場所を教える
     pdfjsLib.GlobalWorkerOptions.workerSrc =
