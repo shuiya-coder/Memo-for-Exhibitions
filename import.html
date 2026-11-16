@@ -12,8 +12,9 @@
     .line .cell { background: #eef4ff; margin-right: 6px; padding: 0 4px; }
     .line .x { color: #1a5fb4; font-size: 0.75rem; }
     textarea.raw { height: 12em; font-family: monospace; }
-    #bounds label { display: inline-block; margin: 4px 12px 4px 0; font-weight: normal; }
-    #bounds input { width: 4.5em; }
+    #columns-editor input { width: 5em; }
+    #columns-editor td { vertical-align: middle; }
+    .message.error { color: #b00020; font-weight: bold; }
     table.result { border-collapse: collapse; font-size: 0.85rem; }
     table.result th, table.result td { border: 1px solid #ccc; padding: 3px 6px; vertical-align: top; }
     table.result th { background: #f4f4f4; }
@@ -48,11 +49,21 @@
   <!-- 5-2：全ページを作品ごとに分けて、表で確認する -->
   <section id="parse-section" hidden>
     <h2>作品への分割</h2>
+    <h3>列の設定</h3>
     <p>
-      文字の左端（x座標）がこの値以上なら、その列に入れます。
-      下の「行ごとの表示」の小さい青い数字を見ながら、ずれていたら直してください。
+      目録によって、列の並びが違います。PDFを読み込むと、見出しの文字（「作品名」「所蔵者」など）から
+      自動で設定します。表の上から下へ、PDFの左から右の順に並べてください。
+      「左端」は、その列の文字が始まる位置（x座標）です。文字の左端がこの値以上で、
+      次の列の左端より小さければ、その列に入ります。
+      ずれているときは、下の「行ごとの表示」の小さい青い数字を見ながら直してください。
     </p>
-    <div id="bounds"></div>
+    <div id="columns-editor"></div>
+    <p>
+      <button type="button" id="add-column">列を追加</button>
+      <button type="button" id="detect-columns">見出しから自動設定</button>
+      <button type="button" id="reset-columns">初期値に戻す</button>
+    </p>
+    <div class="message" id="columns-message"></div>
     <p><button type="button" id="parse">全ページを作品に分ける</button></p>
     <div id="summary"></div>
     <div style="overflow-x: auto">
@@ -97,17 +108,87 @@
     let parsedRows = []; // 分けた作品（表で直してから、メモとして登録する）
     let pdfName = "";    // 読み込んだPDFのファイル名（メモの「取り込み元」に記録する）
 
-    // 列の境目の入力欄を作る（初期値は pdf-import.js の DEFAULT_BOUNDS）
-    const BOUND_LABELS = ["指定", "作品名", "作者名", "時代", "員数", "所蔵者", "展示期間"];
-    const boundsBox = document.getElementById("bounds");
-    BOUND_LABELS.forEach((label, i) => {
-      const l = document.createElement("label");
+    // ----- 列の設定 -----
+    // 列の設定の表の1行（項目の選択、左端の数字、削除ボタン）を作る
+    function addColumnRow(tbody, col) {
+      const tr = tbody.insertRow();
+
+      const select = document.createElement("select");
+      select.className = "col-field";
+      for (const [field, label] of Object.entries(CatalogParser.FIELD_LABELS)) {
+        const opt = document.createElement("option");
+        opt.value = field;
+        opt.textContent = label;
+        select.appendChild(opt);
+      }
+      select.value = col.field;
+      tr.insertCell().appendChild(select);
+
       const input = document.createElement("input");
       input.type = "number";
-      input.className = "bound";
-      input.value = CatalogParser.DEFAULT_BOUNDS[i];
-      l.append(label + "の左端 ", input);
-      boundsBox.appendChild(l);
+      input.className = "col-left";
+      input.value = col.left;
+      tr.insertCell().appendChild(input);
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "この列を消す";
+      del.addEventListener("click", () => tr.remove());
+      tr.insertCell().appendChild(del);
+    }
+
+    // 列の設定の表を、指定した列の定義で作り直す
+    function renderColumns(columns) {
+      const box = document.getElementById("columns-editor");
+      box.innerHTML = "";
+      const table = document.createElement("table");
+      table.className = "result";
+      const head = table.createTHead().insertRow();
+      for (const t of ["列の内容", "左端（x）", ""]) {
+        const th = document.createElement("th");
+        th.textContent = t;
+        head.appendChild(th);
+      }
+      const tbody = table.createTBody();
+      for (const col of columns) addColumnRow(tbody, col);
+      box.appendChild(table);
+    }
+
+    // 画面の列の設定を、列の定義として読み取る（左端の小さい順）
+    function getColumns() {
+      return [...document.querySelectorAll("#columns-editor tbody tr")]
+        .map((tr) => ({
+          field: tr.querySelector(".col-field").value,
+          left: Number(tr.querySelector(".col-left").value),
+        }))
+        .sort((a, b) => a.left - b.left);
+    }
+
+    // 見出しから列を自動で設定する。最初の3ページまでで、見出しが見つかったものを使う
+    async function autoDetectColumns() {
+      const msg = document.getElementById("columns-message");
+      for (let n = 1; n <= Math.min(pdf.numPages, 3); n++) {
+        const cols = CatalogParser.detectColumns(await loadItems(n));
+        if (cols) {
+          renderColumns(cols);
+          msg.textContent = n + " ページ目の見出しから、列を設定しました。列の内容と左端を確認してください。";
+          return;
+        }
+      }
+      msg.textContent = "見出しから列を読み取れませんでした。列の内容と左端を、手で設定してください。";
+    }
+
+    renderColumns(CatalogParser.DEFAULT_COLUMNS);
+    document.getElementById("add-column").addEventListener("click", () => {
+      // 新しい列は、いちばん右の列の少し右に置く（あとで直す）
+      const cols = getColumns();
+      const right = cols.length ? cols[cols.length - 1].left + 50 : 0;
+      addColumnRow(document.querySelector("#columns-editor tbody"), { field: "ignore", left: right });
+    });
+    document.getElementById("detect-columns").addEventListener("click", autoDetectColumns);
+    document.getElementById("reset-columns").addEventListener("click", () => {
+      renderColumns(CatalogParser.DEFAULT_COLUMNS);
+      document.getElementById("columns-message").textContent = "初期値に戻しました";
     });
 
     // 指定ページの文字を取り出す（空白だけのものは除く）。{ str, x, y, w } の配列
@@ -121,19 +202,37 @@
     }
 
     // 全ページを作品に分けて、表で見せる
-    document.getElementById("parse").addEventListener("click", async () => {
-      const bounds = [...document.querySelectorAll(".bound")].map((i) => Number(i.value));
+    async function parseAllPages() {
+      const columns = getColumns();
+      // 作品の始まり（No.）と作品名の列がないと、作品に分けられない
+      const columnsMessage = document.getElementById("columns-message");
+      if (!columns.some((c) => c.field === "no") || !columns.some((c) => c.field === "title")) {
+        columnsMessage.className = "message error";
+        columnsMessage.textContent = "列の設定に、「No.（作品番号）」と「作品名」の列が必要です。";
+        return;
+      }
+      columnsMessage.className = "message";
       const state = { chapter: "" };
       parsedRows = [];
       const leftovers = [];
       for (let n = 1; n <= pdf.numPages; n++) {
         message.textContent = n + " / " + pdf.numPages + " ページを解析中…";
-        const r = CatalogParser.parsePage(await loadItems(n), bounds, state, n);
+        const r = CatalogParser.parsePage(await loadItems(n), columns, state, n);
         parsedRows.push(...r.rows);
         r.leftovers.forEach((s) => leftovers.push("p" + n + "：" + s));
       }
       message.textContent = "解析しました";
       showResult(leftovers);
+    }
+
+    // ボタンが押されたとき。途中で失敗しても、画面にエラーを出す
+    document.getElementById("parse").addEventListener("click", () => {
+      parseAllPages().catch((err) => {
+        const columnsMessage = document.getElementById("columns-message");
+        columnsMessage.className = "message error";
+        columnsMessage.textContent = "解析に失敗しました：" + err.message;
+        console.error(err);
+      });
     });
 
     // 解析結果を、まとめと表で表示する
@@ -174,7 +273,7 @@
       // 表：マウスを No. の上に置くと、その作品に割り当てた元のテキストが出る
       const COLS = [
         ["no", "No."], ["designation", "指定"], ["title", "作品名"], ["author", "作者名"],
-        ["period", "時代"], ["quantity", "員数"], ["holder", "所蔵者"], ["section", "章"], ["page", "頁"],
+        ["period", "時代"], ["place", "制作地"], ["quantity", "員数"], ["holder", "所蔵者"], ["section", "章"], ["page", "頁"],
       ];
       const table = document.getElementById("result");
       table.innerHTML = "";
@@ -269,7 +368,7 @@
           designation: r.designation.trim(),
           author: r.author.trim(),
           period: r.period.trim(),
-          place: "", // 制作地は目録にない場合が多いので、あとでメモ画面で書く
+          place: r.place.trim(), // 目録に制作地の列がなければ空（あとでメモ画面で書ける）
           quantity: r.quantity.trim(),
           holder: r.holder.trim() || fillHolder,
           section: r.section.trim(),
@@ -331,6 +430,7 @@
         document.getElementById("page").value = 1;
         document.getElementById("pager").hidden = false;
         showParseSection();
+        await autoDetectColumns(); // 見出しから、列の並びを自動で設定する
         await showPage(1);
       } catch (err) {
         message.textContent = "読み込みに失敗しました：" + err.message;
@@ -377,7 +477,7 @@
         for (const c of line.cells) {
           const x = document.createElement("span");
           x.className = "x";
-          x.textContent = Math.round(c.x);
+          x.textContent = c.x.toFixed(1); // 小数点以下1桁まで（四捨五入すると、列の境目との差が見えなくなるため）
           const cell = document.createElement("span");
           cell.className = "cell";
           cell.append(x, " " + c.str);
