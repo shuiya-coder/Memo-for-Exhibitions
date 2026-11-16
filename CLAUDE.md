@@ -22,6 +22,6 @@
 
 ## 自分のアプリ（最初に書き足す）
 - 作るもの：展覧会の出品目録PDFから、作品ごとの独立したメモページを作るツール。メモ同士のリンク（「同一作品」「関連作品」）、タグ、検索の機能を持つ。保存はブラウザ内（IndexedDB）とJSON書き出し・読み込み。PDF解析にはPDF.js（CDN）を使う予定。
-- 使うデータ：出品目録PDF（例：shozokan.nich.go.jp で公開されている目録、https://shozokan.nich.go.jp/wp-content/uploads/2026/10/grand-opening-1_list_ja.pdf）。PDF本体はリポジトリに置かず、利用時にブラウザで選んで読み込む。
+- 使うデータ：出品目録PDF（例：shozokan.nich.go.jp で公開されている目録、https://shozokan.nich.go.jp/wp-content/uploads/2026/10/grand-opening-1_list_ja.pdf）。もう1つの例として、段組みカード形式の目録（Daitokuji_list_J.pdf。東京国立博物館 平成館の展覧会）も使う。PDF本体はリポジトリに置かず、利用時にブラウザで選んで読み込む。
 
 ## 自分のルール
