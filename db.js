@@ -51,6 +51,8 @@ const MemoDB = (() => {
       body: "",                 // 自分のメモ
       tags: [],                 // タグ（ステップ3で使う）
       links: [],                // 他メモへのリンク（ステップ6で使う）
+      rawText: "",              // PDF取り込み時の元のテキスト（確認用）
+      source: "",               // 取り込み元（PDFのファイル名とページ）
       createdAt: now,
       updatedAt: now,
     };

@@ -17,7 +17,12 @@
     table.result { border-collapse: collapse; font-size: 0.85rem; }
     table.result th, table.result td { border: 1px solid #ccc; padding: 3px 6px; vertical-align: top; }
     table.result th { background: #f4f4f4; }
-    td.empty { background: #fff0f0; }
+    /* 作品名が空のセル：セルも中の入力欄も、はっきりした赤にする */
+    td.empty { background: #e04040; }
+    td.empty input { background: #ff9a9a; }
+    /* 登録の結果は、ボタンのすぐ下に出す（上のほうだと、表が長くて見えないため） */
+    #register-message { font-weight: bold; min-height: 1.5em; }
+    #register-message.error { color: #b00020; }
   </style>
 </head>
 <body>
@@ -53,6 +58,20 @@
     <div style="overflow-x: auto">
       <table id="result" class="result"></table>
     </div>
+    <p>表の中身は、その場で直せます。登録しない作品は「登録」のチェックを外してください。</p>
+
+    <!-- 登録の設定（表が出てから表示する） -->
+    <div id="register-box" hidden>
+      <label for="exhibition-name">展覧会名（必須）</label>
+      <input type="text" id="exhibition-name" placeholder="PDFの展覧会の正式な名前を入力">
+      <label for="common-tags">全部のメモに付けるタグ（任意。「、」で区切る）</label>
+      <input type="text" id="common-tags" placeholder="例：展覧会名の略称、2026年">
+      <label for="fill-holder">所蔵者が空欄のときに入れる文字（任意）</label>
+      <input type="text" id="fill-holder" placeholder="空のままなら、空欄のまま登録します">
+      <p><button type="button" id="register">メモとして登録</button></p>
+      <p id="register-message"></p>
+      <p id="done-link" hidden><a href="index.html">→ 一覧でメモを見る</a></p>
+    </div>
   </section>
 
   <h2>行ごとの表示</h2>
@@ -67,11 +86,13 @@
 
   <!-- PDF.js：Mozilla製のPDF読み取りライブラリ（Apache License 2.0）。CDNから読み込む -->
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script src="db.js"></script>
   <script src="pdf-import.js"></script>
   <script>
     const message = document.getElementById("message");
     let pdf = null; // 読み込んだPDF
-    let parsedRows = []; // 分けた作品（次のステップ 5-3 で、メモとして登録する）
+    let parsedRows = []; // 分けた作品（表で直してから、メモとして登録する）
+    let pdfName = "";    // 読み込んだPDFのファイル名（メモの「取り込み元」に記録する）
 
     // 列の境目の入力欄を作る（初期値は pdf-import.js の DEFAULT_BOUNDS）
     const BOUND_LABELS = ["指定", "作品名", "作者名", "時代", "員数", "所蔵者", "展示期間"];
@@ -155,22 +176,129 @@
       const table = document.getElementById("result");
       table.innerHTML = "";
       const head = table.insertRow();
-      for (const [, label] of COLS) {
+      for (const label of ["登録", ...COLS.map((c) => c[1])]) {
         const th = document.createElement("th");
         th.textContent = label;
         head.appendChild(th);
       }
       for (const r of parsedRows) {
+        r.include = true; // 登録する作品にチェックを入れた状態から始める
         const tr = table.insertRow();
+
+        // 登録するかどうかのチェックボックス
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = true;
+        cb.addEventListener("change", () => { r.include = cb.checked; });
+        tr.insertCell().appendChild(cb);
+
         for (const [key] of COLS) {
           const td = tr.insertCell();
-          td.textContent = r[key];
+          if (key === "no" || key === "page") {
+            // 番号とページは直さない。No. にマウスを置くと、元のテキストが出る
+            td.textContent = r[key];
+            if (key === "no") td.title = r.rawText;
+            continue;
+          }
+          // それ以外は、その場で直せる入力欄にする
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = r[key];
+          input.size = key === "title" ? 22 : (key === "designation" ? 8 : 14);
           // 作品名が空なら赤く目立たせる（指定・作者名・所蔵者は空でも普通）
-          if (key === "title" && !r.title) td.className = "empty";
-          if (key === "no") td.title = r.rawText;
+          const mark = () => { if (key === "title") td.className = input.value.trim() ? "" : "empty"; };
+          input.addEventListener("input", () => { r[key] = input.value; mark(); });
+          mark();
+          td.appendChild(input);
         }
       }
+      document.getElementById("register-box").hidden = false;
     }
+
+    // 「メモとして登録」：チェックのついた作品を、1件1ページのメモにして保存する
+    async function registerMemos() {
+      // この関数の中の message は、登録ボタンのすぐ下の欄（ページ上部の message とは別）
+      const message = document.getElementById("register-message");
+      message.className = "";
+      document.getElementById("done-link").hidden = true;
+
+      const exhibition = document.getElementById("exhibition-name").value.trim();
+      if (!exhibition) {
+        message.className = "error";
+        message.textContent = "展覧会名を入力してください（上の「展覧会名（必須）」欄が空です）";
+        document.getElementById("exhibition-name").focus();
+        return;
+      }
+
+      const targets = parsedRows.filter((r) => r.include);
+      if (targets.length === 0) {
+        message.className = "error";
+        message.textContent = "登録する作品が選ばれていません（「登録」のチェックがすべて外れています）";
+        return;
+      }
+
+      // 全部に付けるタグ（「、」「,」で区切る。先頭の # は取る）
+      const tags = [...new Set(
+        document.getElementById("common-tags").value
+          .split(/[,、，]/).map((t) => t.trim().replace(/^[#＃]+/, "")).filter(Boolean)
+      )];
+      const fillHolder = document.getElementById("fill-holder").value.trim();
+
+      // すでに同じメモ（展覧会名・No.・作品名が同じ）があれば、重複を避けるため登録しない
+      const existing = await MemoDB.getAll();
+      const keyOf = (ex, no, title) => [ex, no, title].join("\u0000");
+      const exists = new Set(existing.map((m) => keyOf(m.exhibition, m.catalog.no, m.title)));
+
+      const memos = [];
+      let skipped = 0;
+      const base = Date.now();
+      for (const r of targets) {
+        const title = r.title.trim();
+        if (!title) { skipped++; continue; } // 作品名が空のものは登録しない
+        if (exists.has(keyOf(exhibition, r.no, title))) { skipped++; continue; }
+        const m = MemoDB.create();
+        m.title = title;
+        m.exhibition = exhibition;
+        m.catalog = {
+          no: r.no,
+          designation: r.designation.trim(),
+          author: r.author.trim(),
+          period: r.period.trim(),
+          place: "", // 制作地は目録にない場合が多いので、あとでメモ画面で書く
+          quantity: r.quantity.trim(),
+          holder: r.holder.trim() || fillHolder,
+          section: r.section.trim(),
+        };
+        m.tags = [...tags];
+        m.rawText = r.rawText;
+        m.source = pdfName + "（" + r.page + "ページ）";
+        // 一覧は「更新が新しい順」なので、No. が小さいものほど新しい時刻にして、上から順に並べる
+        m.createdAt = m.updatedAt = new Date(base + (targets.length - memos.length)).toISOString();
+        memos.push(m);
+      }
+
+      if (memos.length === 0) {
+        message.className = "error";
+        message.textContent = "登録できる作品がありません（すべて登録済み、または作品名が空です）";
+        return;
+      }
+      const note = skipped ? "（" + skipped + " 件は登録済み・作品名なしのため除きます）" : "";
+      if (!confirm(memos.length + " 件のメモを登録します。" + note + "よろしいですか？")) return;
+
+      await MemoDB.saveMany(memos);
+      message.textContent = memos.length + " 件のメモを登録しました。" + note;
+      document.getElementById("done-link").hidden = false;
+    }
+
+    // ボタンが押されたとき。途中で失敗しても、画面にエラーを出す
+    document.getElementById("register").addEventListener("click", () => {
+      registerMemos().catch((err) => {
+        const message = document.getElementById("register-message");
+        message.className = "error";
+        message.textContent = "登録に失敗しました：" + err.message;
+        console.error(err);
+      });
+    });
 
     // PDFを読み込んだら、分割のメニューを出す（読み込み処理の最後で呼ぶ）
     function showParseSection() {
@@ -188,6 +316,7 @@
     document.getElementById("file").addEventListener("change", async (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      pdfName = file.name;
       try {
         message.textContent = "読み込み中…";
         const data = new Uint8Array(await file.arrayBuffer());
