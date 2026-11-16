@@ -11,6 +11,10 @@
   <h1 id="heading">メモ</h1>
 
   <form id="form">
+    <p>
+      <label class="inline-label"><input type="checkbox" id="favorite"> ★ お気に入り</label>
+    </p>
+
     <label for="title">作品名</label>
     <input type="text" id="title">
 
@@ -301,6 +305,7 @@
       document.getElementById("body").value = memo.body;
       // 鑑賞日と参考文献は後から増えた項目なので、古いメモでは未設定（undefined）のことがある
       document.getElementById("viewDate").value = memo.viewDate || "";
+      document.getElementById("favorite").checked = !!memo.favorite;
       document.getElementById("references").value = memo.references || "";
       for (const f of CATALOG_FIELDS) {
         document.getElementById(f).value = memo.catalog[f] || "";
@@ -325,6 +330,7 @@
       memo.exhibition = document.getElementById("exhibition").value.trim();
       memo.body = document.getElementById("body").value;
       memo.viewDate = document.getElementById("viewDate").value;
+      memo.favorite = document.getElementById("favorite").checked;
       memo.references = document.getElementById("references").value;
       for (const f of CATALOG_FIELDS) {
         memo.catalog[f] = document.getElementById(f).value.trim();

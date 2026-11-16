@@ -28,6 +28,10 @@
     <input type="text" id="search" placeholder="検索（作品名・展覧会名・目録情報・メモ・タグ。空白で区切ると、すべてを含むものだけ）">
   </p>
 
+  <p>
+    <label class="inline-label"><input type="checkbox" id="favorite-only"> ★ お気に入りだけ表示</label>
+  </p>
+
   <!-- タグでの絞り込み（タグを押すと、そのタグのメモだけ表示） -->
   <div id="tag-filter"></div>
 
@@ -175,15 +179,18 @@
       allMemos.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       // タグと検索の言葉、両方の条件に合うメモだけにする
       const query = document.getElementById("search").value;
+      const favoriteOnly = document.getElementById("favorite-only").checked;
       const memos = allMemos.filter((m) =>
-        (!selectedTag || m.tags.includes(selectedTag)) && matchesQuery(m, query));
+        (!selectedTag || m.tags.includes(selectedTag)) &&
+        (!favoriteOnly || m.favorite) &&
+        matchesQuery(m, query));
 
       // 絞り込みで見えなくなったメモは、選択から外す
       visibleMemos = memos;
       const visibleIds = new Set(memos.map((m) => m.id));
       for (const id of [...selected]) if (!visibleIds.has(id)) selected.delete(id);
 
-      const filtered = selectedTag || query.trim();
+      const filtered = selectedTag || query.trim() || favoriteOnly;
       document.getElementById("count").textContent = filtered
         ? memos.length + " 件が見つかりました（全 " + allMemos.length + " 件中）"
         : memos.length + " 件のメモ";
@@ -208,7 +215,17 @@
           updateBulk();
         });
         cb.style.marginRight = "8px";
-        h2.append(cb, a);
+        // お気に入りの★ボタン：押すとその場で付け外しができる（古いメモは favorite が未設定で、★なし）
+        const star = document.createElement("button");
+        star.type = "button";
+        star.className = "star" + (m.favorite ? " on" : "");
+        star.textContent = m.favorite ? "★" : "☆";
+        star.title = m.favorite ? "お気に入りを外す" : "お気に入りに入れる";
+        star.addEventListener("click", async () => {
+          await MemoDB.setFavorite(m.id, !m.favorite);
+          showList();
+        });
+        h2.append(cb, star, a);
 
         const sub = document.createElement("div");
         sub.className = "sub";
@@ -232,6 +249,7 @@
     }
     // 検索ボックスに入力するたびに一覧を更新する
     document.getElementById("search").addEventListener("input", showList);
+    document.getElementById("favorite-only").addEventListener("change", showList);
     showList();
   </script>
 </body>

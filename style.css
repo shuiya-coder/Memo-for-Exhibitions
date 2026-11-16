@@ -32,6 +32,19 @@ button.danger { color: #b00020; border-color: #b00020; }
 .memo-item h2 { font-size: 1.1rem; margin: 0 0 4px; }
 .memo-item .sub { color: #555; font-size: 0.9rem; }
 
+/* お気に入りの★ボタン */
+button.star {
+  border: none;
+  background: none;
+  padding: 0 6px 0 0;
+  font-size: 1.3rem;
+  color: #bbb;
+  line-height: 1;
+}
+button.star.on { color: #e6a700; }
+/* 文章の途中に置くラベル（ふだんの label は1行を使う） */
+.inline-label { display: inline; font-weight: normal; margin: 0; }
+
 /* タグ */
 .tag {
   display: inline-block;

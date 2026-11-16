@@ -51,6 +51,7 @@ const MemoDB = (() => {
       viewDate: "",             // 鑑賞日（任意。"2026-11-03" の形）
       body: "",                 // 自分のメモ
       references: "",           // 参考文献（任意。メモ画面で手入力する）
+      favorite: false,          // お気に入り（true なら★）
       tags: [],                 // タグ（ステップ3で使う）
       links: [],                // 他メモへのリンク（ステップ6で使う）
       rawText: "",              // PDF取り込み時の元のテキスト（確認用）
@@ -131,6 +132,23 @@ const MemoDB = (() => {
     }),
     // a と b の間のリンクを解除する
     removeLink: (aId, bId) => updatePair(aId, bId, dropLinks),
+    // お気に入りの付け外し。更新日時は変えない（一覧の並び順が動かないようにするため）
+    setFavorite: async (id, value) => {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        const req = store.get(id);
+        req.onsuccess = () => {
+          if (req.result) {
+            req.result.favorite = value;
+            store.put(req.result);
+          }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    },
     getAll: () => run("readonly", (s) => s.getAll()),
     get: (id) => run("readonly", (s) => s.get(id)),
     // 保存（同じidがあれば上書き、なければ追加）
