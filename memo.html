@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>メモ - 出品作品メモ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <p><a href="index.html">← 一覧へ戻る</a></p>
+  <h1 id="heading">メモ</h1>
+
+  <form id="form">
+    <label for="title">作品名</label>
+    <input type="text" id="title">
+
+    <label for="exhibition">展覧会名</label>
+    <input type="text" id="exhibition">
+
+    <fieldset>
+      <legend>出品目録の情報</legend>
+      <label for="no">目録番号</label>
+      <input type="text" id="no">
+      <label for="designation">文化財指定</label>
+      <input type="text" id="designation" placeholder="例：国宝、重要文化財">
+      <label for="author">作者名</label>
+      <input type="text" id="author">
+      <label for="period">時代・制作年代</label>
+      <input type="text" id="period">
+      <label for="place">制作地</label>
+      <input type="text" id="place">
+      <label for="quantity">員数</label>
+      <input type="text" id="quantity">
+      <label for="holder">所蔵者</label>
+      <input type="text" id="holder">
+      <label for="section">章・区分</label>
+      <input type="text" id="section">
+    </fieldset>
+
+    <label for="tag-input">タグ</label>
+    <div id="tags"></div>
+    <input type="text" id="tag-input" list="tag-suggestions" placeholder="タグを入力して Enter（例：国宝、絵巻）">
+    <!-- 今まで使ったタグを、入力の候補として出す -->
+    <datalist id="tag-suggestions"></datalist>
+
+    <label for="body">メモ</label>
+    <textarea id="body" rows="8"></textarea>
+
+    <div class="actions">
+      <button type="submit">保存</button>
+      <button type="button" id="delete" class="danger">このメモを削除</button>
+    </div>
+    <div class="message" id="message"></div>
+  </form>
+
+  <script src="db.js"></script>
+  <script>
+    // 目録情報の入力欄のid（memo.catalog の項目名と同じ）
+    const CATALOG_FIELDS = ["no", "designation", "author", "period", "place", "quantity", "holder", "section"];
+
+    const params = new URLSearchParams(location.search);
+    let memo; // いま編集しているメモ
+
+    // ----- タグ -----
+    // 画面に付いているタグを表示する（×を押すと外れる）
+    function renderTags() {
+      const box = document.getElementById("tags");
+      box.innerHTML = "";
+      for (const tag of memo.tags) {
+        const chip = document.createElement("span");
+        chip.className = "tag";
+        chip.textContent = tag;
+        const x = document.createElement("button");
+        x.type = "button"; // フォームの送信ボタンにならないようにする
+        x.textContent = "×";
+        x.title = "このタグを外す";
+        x.addEventListener("click", () => {
+          memo.tags = memo.tags.filter((t) => t !== tag);
+          renderTags();
+        });
+        chip.appendChild(x);
+        box.appendChild(chip);
+      }
+    }
+
+    // タグを1つ追加する（前後の空白と先頭の # は取り、空や重複は無視）
+    function addTag(text) {
+      const tag = text.trim().replace(/^[#＃]+/, "").trim();
+      if (tag && !memo.tags.includes(tag)) {
+        memo.tags.push(tag);
+        renderTags();
+      }
+    }
+
+    const tagInput = document.getElementById("tag-input");
+    tagInput.addEventListener("keydown", (e) => {
+      // 日本語入力の変換を確定する Enter では追加しない（isComposing）
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault(); // 保存（フォーム送信）を防ぐ
+        addTag(tagInput.value);
+        tagInput.value = "";
+      }
+    });
+
+    // これまで全メモで使われたタグを、入力の候補に入れる
+    async function loadTagSuggestions() {
+      const all = await MemoDB.getAll();
+      const tags = [...new Set(all.flatMap((m) => m.tags))].sort();
+      const list = document.getElementById("tag-suggestions");
+      for (const t of tags) {
+        const opt = document.createElement("option");
+        opt.value = t;
+        list.appendChild(opt);
+      }
+    }
+
+    // 画面を開いたときの処理
+    async function init() {
+      if (params.get("new")) {
+        memo = MemoDB.create();           // 新規：空のメモを用意
+        document.getElementById("heading").textContent = "新しいメモ";
+        document.getElementById("delete").hidden = true; // まだ保存前なので削除ボタンは隠す
+      } else {
+        memo = await MemoDB.get(params.get("id"));
+        if (!memo) {
+          document.getElementById("form").hidden = true;
+          document.getElementById("heading").textContent = "メモが見つかりません";
+          return;
+        }
+        document.getElementById("heading").textContent = memo.title || "（作品名なし）";
+      }
+      // メモの内容を入力欄に入れる
+      document.getElementById("title").value = memo.title;
+      document.getElementById("exhibition").value = memo.exhibition;
+      document.getElementById("body").value = memo.body;
+      for (const f of CATALOG_FIELDS) {
+        document.getElementById(f).value = memo.catalog[f] || "";
+      }
+      renderTags();
+      loadTagSuggestions();
+    }
+
+    // 「保存」ボタン
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault(); // ページの再読み込みを止める
+      addTag(tagInput.value); // Enter を押し忘れた入力中のタグも拾う
+      tagInput.value = "";
+      memo.title = document.getElementById("title").value.trim();
+      memo.exhibition = document.getElementById("exhibition").value.trim();
+      memo.body = document.getElementById("body").value;
+      for (const f of CATALOG_FIELDS) {
+        memo.catalog[f] = document.getElementById(f).value.trim();
+      }
+      await MemoDB.save(memo);
+      // 新規だった場合は、保存後に「編集」用のアドレスへ切り替える
+      history.replaceState(null, "", "memo.html?id=" + encodeURIComponent(memo.id));
+      document.getElementById("delete").hidden = false;
+      document.getElementById("heading").textContent = memo.title || "（作品名なし）";
+      document.getElementById("message").textContent = "保存しました";
+    });
+
+    // 「削除」ボタン（確認ダイアログを出してから消す）
+    document.getElementById("delete").addEventListener("click", async () => {
+      if (!confirm("このメモを削除します。元に戻せません。よろしいですか？")) return;
+      await MemoDB.remove(memo.id);
+      location.href = "index.html";
+    });
+
+    init();
+  </script>
+</body>
+</html>

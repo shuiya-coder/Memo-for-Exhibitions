@@ -1,0 +1,67 @@
+/* ===== 共通のスタイル ===== */
+body {
+  font-family: "Yu Gothic", "Hiragino Sans", sans-serif;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 16px;
+  line-height: 1.6;
+  color: #222;
+}
+h1 { font-size: 1.4rem; }
+a { color: #1a5fb4; }
+
+button, .button {
+  padding: 6px 14px;
+  border: 1px solid #888;
+  border-radius: 4px;
+  background: #f4f4f4;
+  cursor: pointer;
+  font-size: 1rem;
+  text-decoration: none;
+  color: #222;
+}
+button.danger { color: #b00020; border-color: #b00020; }
+
+/* 一覧の1件ぶん */
+.memo-item {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 10px 0;
+}
+.memo-item h2 { font-size: 1.1rem; margin: 0 0 4px; }
+.memo-item .sub { color: #555; font-size: 0.9rem; }
+
+/* タグ */
+.tag {
+  display: inline-block;
+  background: #e8f0fb;
+  border-radius: 12px;
+  padding: 2px 4px 2px 10px;
+  margin: 2px 4px 2px 0;
+  font-size: 0.9rem;
+}
+.tag button {
+  border: none;
+  background: none;
+  padding: 0 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+/* 一覧のタグ絞り込み用：押されているタグ */
+button.active { background: #1a5fb4; color: #fff; border-color: #1a5fb4; }
+#tag-filter button { margin: 2px 4px 2px 0; padding: 2px 10px; font-size: 0.9rem; }
+
+/* 編集フォーム */
+label { display: block; margin-top: 12px; font-weight: bold; }
+input[type="text"], textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  font-size: 1rem;
+  font-family: inherit;
+}
+fieldset { margin-top: 16px; border: 1px solid #ccc; border-radius: 6px; }
+legend { font-weight: bold; }
+.actions { margin-top: 20px; display: flex; gap: 10px; }
+.message { color: #2a7a2a; margin-top: 8px; min-height: 1.5em; }

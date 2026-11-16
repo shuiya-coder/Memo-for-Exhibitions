@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF取り込み - 出品作品メモ</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* この画面だけで使う、確認用の表の見た目 */
+    .line { font-family: monospace; font-size: 0.85rem; border-bottom: 1px dotted #ccc; padding: 2px 0; white-space: pre-wrap; }
+    .line .y { color: #888; }
+    .line .cell { background: #eef4ff; margin-right: 6px; padding: 0 4px; }
+    .line .x { color: #1a5fb4; font-size: 0.75rem; }
+    textarea.raw { height: 12em; font-family: monospace; }
+    #bounds label { display: inline-block; margin: 4px 12px 4px 0; font-weight: normal; }
+    #bounds input { width: 4.5em; }
+    table.result { border-collapse: collapse; font-size: 0.85rem; }
+    table.result th, table.result td { border: 1px solid #ccc; padding: 3px 6px; vertical-align: top; }
+    table.result th { background: #f4f4f4; }
+    td.empty { background: #fff0f0; }
+  </style>
+</head>
+<body>
+  <p><a href="index.html">← 一覧へ戻る</a></p>
+  <h1>PDF取り込み（確認用）</h1>
+
+  <p>
+    出品目録のPDFを選ぶと、PDFの中の文字を「位置（座標）」つきで表示します。
+    ステップ5-1では、まず実際の並び方を確かめます（メモはまだ作りません）。
+    PDFはこのパソコンのブラウザの中だけで読み込まれ、外部には送られません。
+  </p>
+
+  <p><input type="file" id="file" accept="application/pdf,.pdf"></p>
+
+  <p id="pager" hidden>
+    ページ：
+    <input type="number" id="page" min="1" value="1" style="width: 5em">
+    / <span id="pages">?</span>
+    <button type="button" id="show">表示</button>
+  </p>
+  <div class="message" id="message"></div>
+
+  <!-- 5-2：全ページを作品ごとに分けて、表で確認する -->
+  <section id="parse-section" hidden>
+    <h2>作品への分割</h2>
+    <p>
+      文字の左端（x座標）がこの値以上なら、その列に入れます。
+      下の「行ごとの表示」の小さい青い数字を見ながら、ずれていたら直してください。
+    </p>
+    <div id="bounds"></div>
+    <p><button type="button" id="parse">全ページを作品に分ける</button></p>
+    <div id="summary"></div>
+    <div style="overflow-x: auto">
+      <table id="result" class="result"></table>
+    </div>
+  </section>
+
+  <h2>行ごとの表示</h2>
+  <p>
+    同じ高さ（y）にある文字を1行にまとめ、左から順に並べています。
+    <span class="cell">青い枠</span>が1つの文字のまとまり、小さい数字が左端の位置（x）です。
+  </p>
+  <div id="lines"></div>
+
+  <h2>テキストだけ（コピー用）</h2>
+  <textarea class="raw" id="raw" readonly></textarea>
+
+  <!-- PDF.js：Mozilla製のPDF読み取りライブラリ（Apache License 2.0）。CDNから読み込む -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script src="pdf-import.js"></script>
+  <script>
+    const message = document.getElementById("message");
+    let pdf = null; // 読み込んだPDF
+    let parsedRows = []; // 分けた作品（次のステップ 5-3 で、メモとして登録する）
+
+    // 列の境目の入力欄を作る（初期値は pdf-import.js の DEFAULT_BOUNDS）
+    const BOUND_LABELS = ["指定", "作品名", "作者名", "時代", "員数", "所蔵者", "展示期間"];
+    const boundsBox = document.getElementById("bounds");
+    BOUND_LABELS.forEach((label, i) => {
+      const l = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "number";
+      input.className = "bound";
+      input.value = CatalogParser.DEFAULT_BOUNDS[i];
+      l.append(label + "の左端 ", input);
+      boundsBox.appendChild(l);
+    });
+
+    // 指定ページの文字を取り出す（空白だけのものは除く）。{ str, x, y, w } の配列
+    async function loadItems(n) {
+      const page = await pdf.getPage(n);
+      const content = await page.getTextContent();
+      // transform[4] が x（右へ）、transform[5] が y（上へ。PDFは下が0）、width が幅
+      return content.items
+        .filter((it) => it.str.trim() !== "")
+        .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }));
+    }
+
+    // 全ページを作品に分けて、表で見せる
+    document.getElementById("parse").addEventListener("click", async () => {
+      const bounds = [...document.querySelectorAll(".bound")].map((i) => Number(i.value));
+      const state = { chapter: "" };
+      parsedRows = [];
+      const leftovers = [];
+      for (let n = 1; n <= pdf.numPages; n++) {
+        message.textContent = n + " / " + pdf.numPages + " ページを解析中…";
+        const r = CatalogParser.parsePage(await loadItems(n), bounds, state, n);
+        parsedRows.push(...r.rows);
+        r.leftovers.forEach((s) => leftovers.push("p" + n + "：" + s));
+      }
+      message.textContent = "解析しました";
+      showResult(leftovers);
+    });
+
+    // 解析結果を、まとめと表で表示する
+    function showResult(leftovers) {
+      // まとめ：件数、番号の抜け・重なり、作品名が空の作品、どこにも入らなかった文字
+      const numbers = parsedRows.map((r) => Number(r.no));
+      const seen = new Set();
+      const dup = [];
+      for (const n of numbers) { if (seen.has(n)) dup.push(n); seen.add(n); }
+      const missing = [];
+      for (let n = 1; n <= Math.max(0, ...numbers); n++) if (!seen.has(n)) missing.push(n);
+      const noTitle = parsedRows.filter((r) => !r.title).map((r) => r.no);
+
+      const summary = document.getElementById("summary");
+      summary.innerHTML = "";
+      const lines = [
+        parsedRows.length + " 件の作品に分けました。",
+        "抜けている番号：" + (missing.length ? missing.join("、") : "なし"),
+        "重なっている番号：" + (dup.length ? dup.join("、") : "なし"),
+        "作品名が空の作品：" + (noTitle.length ? "No. " + noTitle.join("、") : "なし"),
+        "どの作品にも入らなかった文字：" + leftovers.length + " 個",
+      ];
+      for (const t of lines) {
+        const p = document.createElement("div");
+        p.textContent = t;
+        summary.appendChild(p);
+      }
+      if (leftovers.length) {
+        const d = document.createElement("details");
+        const s = document.createElement("summary");
+        s.textContent = "入らなかった文字を見る";
+        const pre = document.createElement("pre");
+        pre.textContent = leftovers.join("\n");
+        d.append(s, pre);
+        summary.appendChild(d);
+      }
+
+      // 表：マウスを No. の上に置くと、その作品に割り当てた元のテキストが出る
+      const COLS = [
+        ["no", "No."], ["designation", "指定"], ["title", "作品名"], ["author", "作者名"],
+        ["period", "時代"], ["quantity", "員数"], ["holder", "所蔵者"], ["section", "章"], ["page", "頁"],
+      ];
+      const table = document.getElementById("result");
+      table.innerHTML = "";
+      const head = table.insertRow();
+      for (const [, label] of COLS) {
+        const th = document.createElement("th");
+        th.textContent = label;
+        head.appendChild(th);
+      }
+      for (const r of parsedRows) {
+        const tr = table.insertRow();
+        for (const [key] of COLS) {
+          const td = tr.insertCell();
+          td.textContent = r[key];
+          // 作品名が空なら赤く目立たせる（指定・作者名・所蔵者は空でも普通）
+          if (key === "title" && !r.title) td.className = "empty";
+          if (key === "no") td.title = r.rawText;
+        }
+      }
+    }
+
+    // PDFを読み込んだら、分割のメニューを出す（読み込み処理の最後で呼ぶ）
+    function showParseSection() {
+      document.getElementById("parse-section").hidden = false;
+    }
+
+    // PDF.js の裏方プログラム（worker）の場所を教える
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+
+    // 日本語フォントの「文字の対応表」（CMap）の場所。これがないと日本語が読めないことがある
+    const CMAP_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/";
+
+    // ファイルが選ばれたとき
+    document.getElementById("file").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        message.textContent = "読み込み中…";
+        const data = new Uint8Array(await file.arrayBuffer());
+        pdf = await pdfjsLib.getDocument({ data: data, cMapUrl: CMAP_URL, cMapPacked: true }).promise;
+        document.getElementById("pages").textContent = pdf.numPages;
+        document.getElementById("page").max = pdf.numPages;
+        document.getElementById("page").value = 1;
+        document.getElementById("pager").hidden = false;
+        showParseSection();
+        await showPage(1);
+      } catch (err) {
+        message.textContent = "読み込みに失敗しました：" + err.message;
+      }
+    });
+
+    document.getElementById("show").addEventListener("click", () => {
+      showPage(Number(document.getElementById("page").value));
+    });
+
+    // 指定したページの文字を取り出して表示する
+    async function showPage(n) {
+      if (!pdf || n < 1 || n > pdf.numPages) {
+        message.textContent = "ページ番号が範囲外です（1〜" + (pdf ? pdf.numPages : "?") + "）";
+        return;
+      }
+      const items = await loadItems(n);
+
+      // 上から下へ（yが大きい順）、同じ行の中では左から右へ
+      items.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+
+      // yが近いもの（3以内）を同じ行にまとめる
+      const lines = [];
+      for (const it of items) {
+        const last = lines[lines.length - 1];
+        if (last && Math.abs(last.y - it.y) <= 3) {
+          last.cells.push(it);
+        } else {
+          lines.push({ y: it.y, cells: [it] });
+        }
+      }
+      for (const line of lines) line.cells.sort((a, b) => a.x - b.x);
+
+      // 画面に出す（textContentを使うので、PDFの文字がそのまま安全に表示される）
+      const box = document.getElementById("lines");
+      box.innerHTML = "";
+      for (const line of lines) {
+        const div = document.createElement("div");
+        div.className = "line";
+        const y = document.createElement("span");
+        y.className = "y";
+        y.textContent = "y=" + Math.round(line.y) + "  ";
+        div.appendChild(y);
+        for (const c of line.cells) {
+          const x = document.createElement("span");
+          x.className = "x";
+          x.textContent = Math.round(c.x);
+          const cell = document.createElement("span");
+          cell.className = "cell";
+          cell.append(x, " " + c.str);
+          div.appendChild(cell);
+        }
+        box.appendChild(div);
+      }
+
+      document.getElementById("raw").value =
+        lines.map((l) => l.cells.map((c) => c.str).join("  ")).join("\n");
+      message.textContent = n + " ページ目：文字のまとまり " + items.length + " 個、" + lines.length + " 行";
+    }
+  </script>
+</body>
+</html>
