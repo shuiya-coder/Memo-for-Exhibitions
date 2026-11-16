@@ -54,6 +54,10 @@
         <p class="note">リンクの追加・解除は、「保存」を押さなくても、すぐに保存されます。</p>
         <h3>同じ作品のメモ（同一作品）</h3>
         <div id="same-list"></div>
+        <!-- 同一作品のメモがあるときだけ出す：横に並べて見比べる画面への入口 -->
+        <p id="compare-link" hidden>
+          <a class="button" id="compare-anchor" href="compare.html">同じ作品のメモを並べて見比べる</a>
+        </p>
         <h3>関連作品のメモ</h3>
         <div id="related-list"></div>
 
@@ -89,6 +93,7 @@
 
   <script src="db.js"></script>
   <script src="search.js"></script>
+  <script src="links.js"></script>
   <script>
     // 目録情報の入力欄のid（memo.catalog の項目名と同じ）
     const CATALOG_FIELDS = ["no", "designation", "author", "period", "place", "quantity", "holder", "section"];
@@ -155,12 +160,6 @@
     let isSaved = false; // このメモが保存済みか（新規は、最初の保存まで false）
     let allMemos = [];   // 全メモ（相手を探すため）
 
-    // 一覧用の説明：作品名 ／ 展覧会名 ／ No.
-    function describe(m) {
-      return [m.title || "（作品名なし）", m.exhibition, m.catalog.no ? "No." + m.catalog.no : ""]
-        .filter(Boolean).join(" ／ ");
-    }
-
     // リンクの1行（メモへのリンク、補足、ボタン）を作る
     function linkRow(m, note, buttonLabel, onClick) {
       const div = document.createElement("div");
@@ -185,25 +184,7 @@
       return div;
     }
 
-    // 同一作品のつながりをたどって、{ メモのid → 直接つながっているメモのid } を返す。
-    // 直接つないだメモは自分自身、間接のメモは、経由したメモのid が入る
-    function findSameGroup(byId, startId) {
-      const via = new Map();
-      const queue = [];
-      for (const l of byId.get(startId).links || []) {
-        if (l.type === "same" && byId.has(l.targetId)) { via.set(l.targetId, l.targetId); queue.push(l.targetId); }
-      }
-      while (queue.length) {
-        const id = queue.shift();
-        for (const l of byId.get(id).links || []) {
-          if (l.type === "same" && l.targetId !== startId && byId.has(l.targetId) && !via.has(l.targetId)) {
-            via.set(l.targetId, via.get(id)); // 経由は、最初に直接つながっているメモ
-            queue.push(l.targetId);
-          }
-        }
-      }
-      return via;
-    }
+    // describe() と findSameGroup() は links.js にある
 
     // リンクの欄を、最新の内容で表示し直す
     async function refreshLinks() {
@@ -229,6 +210,9 @@
         else sameBox.appendChild(linkRow(m, "（" + describe(byId.get(viaId)) + " を経由）", "", null));
       }
       if (via.size === 0) sameBox.textContent = "なし";
+      // 見比べる画面への入口は、同一作品のメモがあるときだけ出す
+      document.getElementById("compare-link").hidden = via.size === 0;
+      document.getElementById("compare-anchor").href = "compare.html?id=" + encodeURIComponent(memo.id);
 
       // 関連作品（直接つないだものだけ）
       const relatedBox = document.getElementById("related-list");

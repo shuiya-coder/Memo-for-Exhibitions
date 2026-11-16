@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>メモを見比べる - 出品作品メモ</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* この画面は横に広く使う */
+    body { max-width: none; }
+    .options label { display: inline-block; margin: 0 16px 0 0; font-weight: normal; }
+    .scroll { overflow-x: auto; }
+    table.compare { border-collapse: collapse; font-size: 0.95rem; }
+    table.compare th, table.compare td {
+      border: 1px solid #ccc; padding: 6px 10px; vertical-align: top;
+      min-width: 14em; max-width: 24em; text-align: left;
+    }
+    table.compare thead th { background: #f4f4f4; }
+    /* 左端の「項目」の列は、横にスクロールしても見えるように固定する */
+    table.compare th:first-child {
+      position: sticky; left: 0; min-width: 6em; background: #f4f4f4; z-index: 1;
+    }
+    /* 違いのある項目は黄色で強調する */
+    table.compare tr.diff td { background: #fff3b0; }
+    table.compare tr.diff th:first-child { background: #ffe066; }
+    td.body { white-space: pre-wrap; }
+    td .none { color: #aaa; }
+    .badge { font-size: 0.8rem; padding: 1px 6px; border-radius: 8px; background: #e8f0fb; margin-left: 4px; }
+    .badge.base { background: #1a5fb4; color: #fff; }
+  </style>
+</head>
+<body>
+  <p><a id="back" href="index.html">← 一覧へ戻る</a></p>
+  <h1>メモを見比べる</h1>
+  <p id="info"></p>
+
+  <p class="options">
+    <label><input type="checkbox" id="diff-only"> 違いのある項目だけ表示</label>
+    <label><input type="checkbox" id="with-related"> 関連作品のメモも含める</label>
+  </p>
+  <p class="note">黄色の行は、並べたメモの間で内容に違いがある項目です。メモの題名を押すと、そのメモの画面が開きます（編集はそちらで行います）。</p>
+
+  <div class="scroll">
+    <table class="compare" id="compare"></table>
+  </div>
+
+  <script src="db.js"></script>
+  <script src="links.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const baseId = params.get("id");
+
+    // 表の行：[見出し, メモから値を取り出す関数]
+    const FIELDS = [
+      ["作品名", (m) => m.title],
+      ["展覧会名", (m) => m.exhibition],
+      ["目録番号", (m) => m.catalog.no],
+      ["文化財指定", (m) => m.catalog.designation],
+      ["作者名", (m) => m.catalog.author],
+      ["時代・制作年代", (m) => m.catalog.period],
+      ["制作地", (m) => m.catalog.place],
+      ["員数", (m) => m.catalog.quantity],
+      ["所蔵者", (m) => m.catalog.holder],
+      ["章・区分", (m) => m.catalog.section],
+      ["タグ", (m) => m.tags.join("、")],
+      ["メモ", (m) => m.body, "body"], // 3つ目は、セルに付ける class（長い文章用）
+    ];
+
+    async function render() {
+      const all = await MemoDB.getAll();
+      const byId = new Map(all.map((m) => [m.id, m]));
+      const base = byId.get(baseId);
+      const info = document.getElementById("info");
+      const table = document.getElementById("compare");
+      table.innerHTML = "";
+
+      if (!base) {
+        info.textContent = "メモが見つかりません。";
+        return;
+      }
+      document.getElementById("back").href = "memo.html?id=" + encodeURIComponent(base.id);
+      document.getElementById("back").textContent = "← 「" + (base.title || "（作品名なし）") + "」のメモへ戻る";
+
+      // 並べるメモ：このメモ → 同一作品のメモ → （選んだ場合）関連作品のメモ
+      const columns = [{ memo: base, kind: "base" }];
+      for (const id of findSameGroup(byId, base.id).keys()) columns.push({ memo: byId.get(id), kind: "same" });
+      if (document.getElementById("with-related").checked) {
+        for (const l of base.links || []) {
+          const m = byId.get(l.targetId);
+          if (l.type === "related" && m && !columns.some((c) => c.memo.id === m.id)) {
+            columns.push({ memo: m, kind: "related" });
+          }
+        }
+      }
+      info.textContent = columns.length === 1
+        ? "同一作品としてつながったメモがありません。メモ画面の「リンク」で追加してください。"
+        : columns.length + " 件のメモを並べています。";
+
+      // 見出しの行：メモの題名（そのメモへのリンク）と、種類の印
+      const head = table.createTHead().insertRow();
+      head.appendChild(document.createElement("th")).textContent = "項目";
+      for (const c of columns) {
+        const th = document.createElement("th");
+        const a = document.createElement("a");
+        a.href = "memo.html?id=" + encodeURIComponent(c.memo.id);
+        a.textContent = describe(c.memo);
+        const badge = document.createElement("span");
+        badge.className = "badge" + (c.kind === "base" ? " base" : "");
+        badge.textContent = { base: "このメモ", same: "同一作品", related: "関連作品" }[c.kind];
+        th.append(a, badge);
+        head.appendChild(th);
+      }
+
+      // 項目ごとの行：メモの間で値が違えば、黄色の行にする
+      const body = table.createTBody();
+      const diffOnly = document.getElementById("diff-only").checked;
+      for (const [label, getValue, cls] of FIELDS) {
+        const values = columns.map((c) => (getValue(c.memo) || "").trim());
+        const differs = new Set(values).size > 1;
+        if (diffOnly && !differs) continue;
+
+        const tr = body.insertRow();
+        if (differs) tr.className = "diff";
+        tr.appendChild(document.createElement("th")).textContent = label;
+        for (const v of values) {
+          const td = tr.insertCell();
+          if (cls) td.className = cls;
+          if (v) {
+            td.textContent = v; // textContent なので、入力した文字がそのまま安全に表示される
+          } else {
+            const none = document.createElement("span");
+            none.className = "none";
+            none.textContent = "—";
+            td.appendChild(none);
+          }
+        }
+      }
+      if (diffOnly && body.rows.length === 0) {
+        info.textContent += " 違いのある項目はありません。";
+      }
+    }
+
+    document.getElementById("diff-only").addEventListener("change", render);
+    document.getElementById("with-related").addEventListener("change", render);
+    render();
+  </script>
+</body>
+</html>
