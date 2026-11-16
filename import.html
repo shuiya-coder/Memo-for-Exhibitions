@@ -15,6 +15,10 @@
     #columns-editor input { width: 5em; }
     #columns-editor td { vertical-align: middle; }
     .message.error { color: #b00020; font-weight: bold; }
+    .scroll-box { max-height: 24em; overflow: auto; border: 1px solid #ccc; }
+    .scroll-box table { border-collapse: collapse; font-size: 0.85rem; width: 100%; }
+    .scroll-box td, .scroll-box th { border-bottom: 1px solid #eee; padding: 2px 8px; text-align: left; }
+    .scroll-box tr.picked td { background: #eef4ff; }
     table.result { border-collapse: collapse; font-size: 0.85rem; }
     table.result th, table.result td { border: 1px solid #ccc; padding: 3px 6px; vertical-align: top; }
     table.result th { background: #f4f4f4; }
@@ -64,6 +68,25 @@
       <button type="button" id="reset-columns">初期値に戻す</button>
     </p>
     <div class="message" id="columns-message"></div>
+
+    <!-- 自動設定がうまくいかないとき：見出しにする文字を、自分で選ぶ -->
+    <details id="header-picker">
+      <summary>見出しを手動で選んで、列を設定する</summary>
+      <p>
+        PDFの上のほうの文字を一覧に出します。見出しとして使う文字にチェックを入れ、
+        それぞれ「列の内容」を選んでください。1つの列にあたる見出しを、1つだけ選びます
+        （「文化財」と「指定」のように、2行にわたる見出しは、どちらか一方で構いません）。
+        「No.（作品番号）」と「作品名」は必ず選んでください。
+        見出しの下にあるデータの位置に合わせて、列の左端を決めます。
+      </p>
+      <p>
+        ページ：<input type="number" id="header-page" min="1" value="1" style="width: 5em">
+        <button type="button" id="load-headers">見出しの候補を表示</button>
+      </p>
+      <div class="scroll-box" id="header-candidates"></div>
+      <p><button type="button" id="apply-headers" disabled>選んだ見出しで列を設定</button></p>
+      <div class="message" id="header-message"></div>
+    </details>
     <p><button type="button" id="parse">全ページを作品に分ける</button></p>
     <div id="summary"></div>
     <div style="overflow-x: auto">
@@ -186,6 +209,100 @@
       addColumnRow(document.querySelector("#columns-editor tbody"), { field: "ignore", left: right });
     });
     document.getElementById("detect-columns").addEventListener("click", autoDetectColumns);
+
+    // ----- 見出しを手動で選ぶ -----
+    let headerPageItems = []; // 見出しの候補を出したページの、すべての文字
+    let headerRows = [];      // 一覧の1行ごとの { item, checkbox, select }
+
+    // 指定ページの上のほうの文字を、見出しの候補として一覧に出す
+    async function loadHeaderCandidates() {
+      const msg = document.getElementById("header-message");
+      msg.className = "message";
+      const n = Number(document.getElementById("header-page").value);
+      if (!pdf) { msg.textContent = "先にPDFを選んでください"; return; }
+      if (!(n >= 1 && n <= pdf.numPages)) { msg.textContent = "ページ番号が範囲外です（1〜" + pdf.numPages + "）"; return; }
+
+      headerPageItems = await loadItems(n);
+      // 上から下、同じ高さなら左から右。上のほうの200個を候補にする
+      const sorted = [...headerPageItems].sort((a, b) => (b.y - a.y) || (a.x - b.x)).slice(0, 200);
+
+      const box = document.getElementById("header-candidates");
+      box.innerHTML = "";
+      const table = document.createElement("table");
+      const head = table.createTHead().insertRow();
+      for (const t of ["使う", "文字", "x", "y", "列の内容"]) {
+        const th = document.createElement("th");
+        th.textContent = t;
+        head.appendChild(th);
+      }
+      const tbody = table.createTBody();
+      headerRows = [];
+      // 同じ項目になりそうな文字が複数あるとき（「文化財」と「指定」など）は、
+      // いちばん下（データに近い）ものだけを、最初にチェックしておく
+      const claimed = new Map();
+      for (const it of sorted) {
+        const g = CatalogParser.guessField(it.str);
+        if (g && g !== "ignore") claimed.set(g, it); // 上から順に見るので、下のものが後から上書きする
+      }
+      for (const item of sorted) {
+        const tr = tbody.insertRow();
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        tr.insertCell().appendChild(cb);
+        tr.insertCell().textContent = item.str;
+        tr.insertCell().textContent = item.x.toFixed(1);
+        tr.insertCell().textContent = item.y.toFixed(1);
+
+        const select = document.createElement("select");
+        for (const [field, label] of Object.entries(CatalogParser.FIELD_LABELS)) {
+          const opt = document.createElement("option");
+          opt.value = field;
+          opt.textContent = label;
+          select.appendChild(opt);
+        }
+        // 見出しの言葉として知っているものは、自動でチェックして項目を入れておく
+        const guess = CatalogParser.guessField(item.str);
+        select.value = guess || "ignore";
+        cb.checked = guess !== null && (guess === "ignore" || claimed.get(guess) === item);
+        tr.className = cb.checked ? "picked" : "";
+        cb.addEventListener("change", () => { tr.className = cb.checked ? "picked" : ""; });
+        // 項目を変えたら、その文字を使うことにする
+        select.addEventListener("change", () => { cb.checked = true; tr.className = "picked"; });
+        tr.insertCell().appendChild(select);
+        headerRows.push({ item, checkbox: cb, select });
+      }
+      box.appendChild(table);
+      document.getElementById("apply-headers").disabled = false;
+      msg.textContent = "上のほうの " + sorted.length + " 個の文字を表示しました。見出しにチェックが入っているか確かめてください。";
+    }
+
+    // 選んだ見出しから、列の設定を作る
+    function applyHeaders() {
+      const msg = document.getElementById("header-message");
+      const chosen = headerRows.filter((r) => r.checkbox.checked);
+      const cells = chosen.map((r) => ({ field: r.select.value, x: r.item.x, y: r.item.y }));
+      if (!cells.some((c) => c.field === "no") || !cells.some((c) => c.field === "title")) {
+        msg.className = "message error";
+        msg.textContent = "「No.（作品番号）」と「作品名」の見出しを、選んでください。";
+        return;
+      }
+      // 選んだ見出しのうち、いちばん下より下にある文字を「データ」として、列の左端の決定に使う
+      const lowest = Math.min(...cells.map((c) => c.y));
+      const columns = CatalogParser.buildColumns(cells, headerPageItems.filter((it) => it.y < lowest - 2));
+      renderColumns(columns);
+      msg.className = "message";
+      msg.textContent = "選んだ見出し " + cells.length + " 個から、列を設定しました。上の「列の設定」で、左端の値を確認してください。";
+      document.getElementById("columns-message").textContent = "見出しを手動で選んで、列を設定しました。";
+    }
+
+    document.getElementById("load-headers").addEventListener("click", () => {
+      loadHeaderCandidates().catch((err) => {
+        const msg = document.getElementById("header-message");
+        msg.className = "message error";
+        msg.textContent = "見出しの候補を出せませんでした：" + err.message;
+      });
+    });
+    document.getElementById("apply-headers").addEventListener("click", applyHeaders);
     document.getElementById("reset-columns").addEventListener("click", () => {
       renderColumns(CatalogParser.DEFAULT_COLUMNS);
       document.getElementById("columns-message").textContent = "初期値に戻しました";

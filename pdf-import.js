@@ -95,6 +95,34 @@ const CatalogParser = (() => {
     return field;
   }
 
+  // 見出しの文字（項目と位置 x）から、列の定義を作る。
+  //   cells：{ field: 項目, x: 見出しの左端 } の並び
+  //   bodyItems：見出しより下にある文字（データ）。列の左端をデータの位置に合わせるために使う
+  // 列の左端は、No. の列だけは 0（いちばん左まで）、ほかは見出しの左端から決める。
+  // データの文字が、見出しより左から始まる目録もある（見出しは中央ぞろえなど）ので、
+  // 見出しの少し左〜少し右に始まるデータがあれば、その左端より1つ左を列の左端にする
+  function buildColumns(cells, bodyItems) {
+    const bodyXs = bodyItems.map((it) => it.x);
+    const leftFor = (h) => {
+      const byMargin = h - HEADER_MARGIN;
+      const near = bodyXs.filter((x) => x >= h - 10 && x <= h + 4);
+      return near.length ? Math.min(byMargin, Math.floor(Math.min(...near)) - 1) : byMargin;
+    };
+    let columns = cells.map((c) => ({
+      field: c.field,
+      left: c.field === "no" ? 0 : Math.round(leftFor(c.x)),
+    }));
+    // ほとんど同じ位置に「使わない列」と別の列があれば、別の列を残す
+    columns = columns.filter((c) =>
+      c.field !== "ignore" || !columns.some((o) => o.field !== "ignore" && Math.abs(o.left - c.left) <= 2));
+    return sortColumns(columns).map(({ field, left }) => ({ field, left }));
+  }
+
+  // 文字から、項目を推測する（見出しの言葉に当てはまらなければ null）
+  function guessField(str) {
+    return WORD_TO_FIELD.get(norm(str)) || null;
+  }
+
   // 見出しの文字と位置から、列の定義を作る。読み取れなければ null
   function detectColumns(items) {
     // 「No.」の見出しを探す（いちばん左にあるもの）
@@ -124,25 +152,11 @@ const CatalogParser = (() => {
       chosen.push(c);
     }
 
-    // 見出しの左端から列の左端を決める。No. の列だけは 0（いちばん左まで）。
-    // データの文字が、見出しより左から始まる目録もある（見出しは中央ぞろえなど）ので、
-    // 見出しの少し左〜少し右に始まるデータがあれば、その左端より1つ左を列の左端にする
-    const bodyXs = items.filter((it) => it.y < noItem.y - 2).map((it) => it.x);
-    const leftFor = (h) => {
-      const byMargin = h - HEADER_MARGIN;
-      const near = bodyXs.filter((x) => x >= h - 10 && x <= h + 4);
-      return near.length ? Math.min(byMargin, Math.floor(Math.min(...near)) - 1) : byMargin;
-    };
-    let columns = chosen.map((c) => ({
-      field: c.field,
-      left: c.field === "no" ? 0 : Math.round(leftFor(c.left)),
-    }));
-    // ほとんど同じ位置に「使わない列」と別の列があれば、別の列を残す
-    columns = columns.filter((c) =>
-      c.field !== "ignore" || !columns.some((o) => o.field !== "ignore" && Math.abs(o.left - c.left) <= 2));
-
+    const columns = buildColumns(
+      chosen.map((c) => ({ field: c.field, x: c.left })),
+      items.filter((it) => it.y < noItem.y - 2));
     if (!used.has("no") || !used.has("title") || columns.length < 3) return null;
-    return sortColumns(columns).map(({ field, left }) => ({ field, left }));
+    return columns;
   }
 
   // 高さが近い文字を1行にまとめる。上の行から順に返す
@@ -313,5 +327,5 @@ const CatalogParser = (() => {
     return { rows: result, leftovers };
   }
 
-  return { FIELD_LABELS, DEFAULT_COLUMNS, detectColumns, parsePage };
+  return { FIELD_LABELS, DEFAULT_COLUMNS, detectColumns, buildColumns, guessField, parsePage };
 })();
